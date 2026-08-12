@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources>
+
+    <color name="elevenplay_blue">#0B66FF</color>
+
+    <color name="elevenplay_blue_dark">#0647B8</color>
+
+    <color name="elevenplay_background">#FFFFFF</color>
+
+    <color name="elevenplay_black">#000000</color>
+
+    <color name="elevenplay_white">#FFFFFF</color>
+
+</resources>
