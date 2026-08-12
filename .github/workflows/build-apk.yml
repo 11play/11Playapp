@@ -1,0 +1,180 @@
+name: Build 11Play APK
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+
+      # =====================================================
+      # CHECKOUT PROJECT
+      # =====================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # =====================================================
+      # JAVA 17
+      # =====================================================
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+
+      # =====================================================
+      # ANDROID SDK
+      # =====================================================
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;35.0.0"
+
+
+      # =====================================================
+      # GRADLE
+      #
+      # AGP 8.13.2 requires Gradle 8.13.
+      # No gradlew file is required by this workflow.
+      # =====================================================
+
+      - name: Setup Gradle 8.13
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.13"
+
+
+      # =====================================================
+      # FIREBASE GOOGLE SERVICES
+      #
+      # google-services.json is intentionally NOT committed
+      # into the GitHub repository.
+      #
+      # Later we will create GitHub Secret:
+      #
+      # GOOGLE_SERVICES_JSON_B64
+      #
+      # The workflow recreates:
+      #
+      # app/google-services.json
+      #
+      # during the build only.
+      # =====================================================
+
+      - name: Create google-services.json
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "ERROR: GOOGLE_SERVICES_JSON_B64 secret is missing."
+            exit 1
+          fi
+
+          echo "$GOOGLE_SERVICES_JSON_B64" \
+            | base64 --decode \
+            > app/google-services.json
+
+          if [ ! -s app/google-services.json ]; then
+            echo "ERROR: google-services.json could not be created."
+            exit 1
+          fi
+
+          echo "google-services.json created successfully."
+
+
+      # =====================================================
+      # VALIDATE PROJECT
+      # =====================================================
+
+      - name: Show Gradle version
+        run: gradle --version
+
+
+      - name: Validate Android project
+        shell: bash
+        run: |
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+
+
+      # =====================================================
+      # BUILD DEBUG APK
+      #
+      # Debug APK can be installed directly for testing.
+      # =====================================================
+
+      - name: Build debug APK
+        run: gradle clean assembleDebug --stacktrace
+
+
+      # =====================================================
+      # FIND APK
+      # =====================================================
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "APK generated:"
+          ls -lh "$APK_PATH"
+
+
+      # =====================================================
+      # RENAME APK
+      # =====================================================
+
+      - name: Rename APK
+        shell: bash
+        run: |
+          mkdir -p apk-output
+
+          cp \
+            app/build/outputs/apk/debug/app-debug.apk \
+            apk-output/11Play-debug.apk
+
+
+      # =====================================================
+      # UPLOAD APK TO GITHUB ACTIONS
+      # =====================================================
+
+      - name: Upload 11Play APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 11Play-Android-APK
+          path: apk-output/11Play-debug.apk
+          if-no-files-found: error
+          retention-days: 30
