@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "88725708371",
+    "project_id": "web11-one",
+    "storage_bucket": "web11-one.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:88725708371:android:9978ef7eb9fcec1308f0a6",
+        "android_client_info": {
+          "package_name": "com.elevenplay.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "88725708371-qs4rrfsp2iei9id3km4k09pkk9625n3e.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.elevenplay.app",
+            "certificate_hash": "97ed7dee7d247e74f4e93cdc2dd8eaf46273aea0"
+          }
+        },
+        {
+          "client_id": "88725708371-2ikm1134g9qu5nrib5jecm4b4sdb626q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCF37sTb9Z33cSHs0SIF5TmoMGLgXCdsMs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "88725708371-2ikm1134g9qu5nrib5jecm4b4sdb626q.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
