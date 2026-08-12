@@ -1,5 +1,9 @@
 package com.elevenplay.app.bridge;
 
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Context;
+import android.content.Intent;
 import android.net.Uri;
 import android.webkit.WebView;
 
@@ -19,38 +23,26 @@ import java.util.Locale;
 import java.util.Set;
 
 /* =========================================================
-   11PLAY — NATIVE AUTH BRIDGE
+   11PLAY — NATIVE BRIDGE
 
    Responsibilities:
-   - Create a secure WebView <-> Android authentication bridge
-   - Expose the bridge ONLY to the official 11Play origin
-   - Accept authentication commands from the main frame only
-   - Start native Google Sign-In
-   - Return Google ID token after successful authentication
-   - Return Firebase user information
+   - Secure WebView <-> Android communication
+   - Expose bridge ONLY to official 11Play origin
+   - Handle 11Play native Google authentication
+   - Handle 11Play native Android sharing
+   - Return Firebase/native authentication state
    - Handle native sign-out
-   - Report native authentication state
 
    Security:
    - Uses WebViewCompat.addWebMessageListener()
-   - No wildcard origin is used
-   - Only HTTPS 11play.github.io is accepted
-   - Only main-frame messages are accepted
-   - tawk.to / external frames cannot call this bridge
-   - Message payload size is limited
+   - No wildcard origin
+   - Only https://11play.github.io
+   - Main frame only
+   - Third-party websites cannot call this bridge
 
-   JavaScript object exposed to the official page:
+   JavaScript object:
 
        window.ElevenPlayNativeAuth
-
-   JavaScript can send:
-
-       ElevenPlayNativeAuth.postMessage(
-           JSON.stringify({
-               action: "signIn",
-               requestId: "..."
-           })
-       );
 
 ========================================================= */
 
@@ -58,7 +50,7 @@ public final class NativeAuthBridge
         implements WebViewCompat.WebMessageListener {
 
     /* =====================================================
-       JAVASCRIPT OBJECT NAME
+       JAVASCRIPT OBJECT
     ===================================================== */
 
     public static final String JS_OBJECT_NAME =
@@ -81,16 +73,28 @@ public final class NativeAuthBridge
     public static final String ACTION_SIGN_OUT =
             "signOut";
 
+    public static final String ACTION_SHARE =
+            "share";
+
 
     /* =====================================================
        LIMITS
     ===================================================== */
 
     private static final int MAX_MESSAGE_LENGTH =
-            8192;
+            16384;
 
     private static final int MAX_REQUEST_ID_LENGTH =
             128;
+
+    private static final int MAX_SHARE_TITLE_LENGTH =
+            200;
+
+    private static final int MAX_SHARE_TEXT_LENGTH =
+            5000;
+
+    private static final int MAX_SHARE_URL_LENGTH =
+            2048;
 
 
     /* =====================================================
@@ -99,8 +103,7 @@ public final class NativeAuthBridge
 
     private final WebView webView;
 
-    private final GoogleAuthManager
-            googleAuthManager;
+    private final GoogleAuthManager googleAuthManager;
 
 
     /* =====================================================
@@ -119,17 +122,22 @@ public final class NativeAuthBridge
             WebView webView,
             GoogleAuthManager googleAuthManager
     ) {
+
         if (webView == null) {
+
             throw new IllegalArgumentException(
                     "WebView is required."
             );
         }
 
+
         if (googleAuthManager == null) {
+
             throw new IllegalArgumentException(
                     "GoogleAuthManager is required."
             );
         }
+
 
         this.webView =
                 webView;
@@ -140,37 +148,34 @@ public final class NativeAuthBridge
 
 
     /* =====================================================
-       ATTACH BRIDGE
-
-       The object is injected ONLY into frames matching:
-
-           https://11play.github.io
-
-       We additionally reject:
-       - non-main-frame messages
-       - unexpected source origins
+       ATTACH
     ===================================================== */
 
     public boolean attach() {
 
         if (attached) {
+
             return true;
         }
 
+
         if (
                 !WebViewFeature.isFeatureSupported(
-                        WebViewFeature
-                                .WEB_MESSAGE_LISTENER
+                        WebViewFeature.WEB_MESSAGE_LISTENER
                 )
         ) {
+
             return false;
         }
 
+
         try {
+
             Set<String> allowedOrigins =
                     Collections.singleton(
                             AppConfig.OFFICIAL_ORIGIN
                     );
+
 
             WebViewCompat.addWebMessageListener(
                     webView,
@@ -179,8 +184,10 @@ public final class NativeAuthBridge
                     this
             );
 
+
             attached =
                     true;
+
 
             return true;
 
@@ -195,7 +202,7 @@ public final class NativeAuthBridge
 
 
     /* =====================================================
-       RECEIVE MESSAGE FROM JAVASCRIPT
+       RECEIVE JAVASCRIPT MESSAGE
     ===================================================== */
 
     @Override
@@ -218,7 +225,7 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "frame-not-allowed",
-                    "Authentication requests are only allowed from the main 11Play page."
+                    "Native requests are only allowed from the main 11Play page."
             );
 
             return;
@@ -226,7 +233,7 @@ public final class NativeAuthBridge
 
 
         /* =============================================
-           VERIFY SOURCE ORIGIN
+           OFFICIAL ORIGIN ONLY
         ============================================== */
 
         if (
@@ -240,7 +247,7 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "origin-not-allowed",
-                    "Authentication request origin is not allowed."
+                    "Request origin is not allowed."
             );
 
             return;
@@ -262,7 +269,7 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "invalid-message-type",
-                    "Invalid authentication message."
+                    "Invalid native message."
             );
 
             return;
@@ -271,6 +278,7 @@ public final class NativeAuthBridge
 
         String rawMessage =
                 message.getData();
+
 
         if (
                 rawMessage == null ||
@@ -282,16 +290,12 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "empty-message",
-                    "Authentication message is empty."
+                    "Native message is empty."
             );
 
             return;
         }
 
-
-        /* =============================================
-           MESSAGE SIZE LIMIT
-        ============================================== */
 
         if (
                 rawMessage.length() >
@@ -303,7 +307,7 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "message-too-large",
-                    "Authentication message is too large."
+                    "Native message is too large."
             );
 
             return;
@@ -316,7 +320,9 @@ public final class NativeAuthBridge
 
         JSONObject request;
 
+
         try {
+
             request =
                     new JSONObject(
                             rawMessage
@@ -329,7 +335,7 @@ public final class NativeAuthBridge
                     "",
                     "",
                     "invalid-json",
-                    "Authentication message is invalid."
+                    "Native message is invalid."
             );
 
             return;
@@ -343,6 +349,7 @@ public final class NativeAuthBridge
                                 ""
                         )
                 );
+
 
         String requestId =
                 sanitizeRequestId(
@@ -360,7 +367,7 @@ public final class NativeAuthBridge
                     "",
                     requestId,
                     "missing-action",
-                    "Authentication action is missing."
+                    "Native action is missing."
             );
 
             return;
@@ -368,7 +375,7 @@ public final class NativeAuthBridge
 
 
         /* =============================================
-           ACTION ROUTING
+           ACTION ROUTER
         ============================================== */
 
         switch (action) {
@@ -413,6 +420,17 @@ public final class NativeAuthBridge
                 break;
 
 
+            case ACTION_SHARE:
+
+                handleShare(
+                        request,
+                        replyProxy,
+                        requestId
+                );
+
+                break;
+
+
             default:
 
                 sendError(
@@ -420,7 +438,7 @@ public final class NativeAuthBridge
                         action,
                         requestId,
                         "unsupported-action",
-                        "Unsupported authentication action."
+                        "Unsupported native action."
                 );
 
                 break;
@@ -444,10 +462,12 @@ public final class NativeAuthBridge
                         true
                 );
 
+
         try {
+
             response.put(
                     "type",
-                    "native-auth-ready"
+                    "native-ready"
             );
 
             response.put(
@@ -457,13 +477,18 @@ public final class NativeAuthBridge
 
             response.put(
                     "signedIn",
-                    googleAuthManager
-                            .isSignedIn()
+                    googleAuthManager.isSignedIn()
+            );
+
+            response.put(
+                    "shareSupported",
+                    true
             );
 
         } catch (Exception ignored) {
             // Base response remains valid.
         }
+
 
         sendResponse(
                 replyProxy,
@@ -473,7 +498,7 @@ public final class NativeAuthBridge
 
 
     /* =====================================================
-       CURRENT AUTH STATE
+       AUTH STATE
     ===================================================== */
 
     private void handleGetAuthState(
@@ -482,8 +507,8 @@ public final class NativeAuthBridge
     ) {
 
         FirebaseUser firebaseUser =
-                googleAuthManager
-                        .getCurrentUser();
+                googleAuthManager.getCurrentUser();
+
 
         JSONObject response =
                 createBaseResponse(
@@ -492,7 +517,9 @@ public final class NativeAuthBridge
                         true
                 );
 
+
         try {
+
             response.put(
                     "type",
                     "auth-state"
@@ -503,9 +530,9 @@ public final class NativeAuthBridge
                     firebaseUser != null
             );
 
+
             if (
-                    firebaseUser !=
-                            null
+                    firebaseUser != null
             ) {
 
                 response.put(
@@ -517,8 +544,9 @@ public final class NativeAuthBridge
             }
 
         } catch (Exception ignored) {
-            // Send base response.
+            // Base response remains valid.
         }
+
 
         sendResponse(
                 replyProxy,
@@ -529,13 +557,6 @@ public final class NativeAuthBridge
 
     /* =====================================================
        GOOGLE SIGN-IN
-
-       On success the Google ID token is returned to the
-       official 11Play page.
-
-       The injected native-auth-bridge.js file will later
-       use this token to establish the Firebase Web SDK
-       session inside the WebView.
     ===================================================== */
 
     private void handleSignIn(
@@ -554,9 +575,7 @@ public final class NativeAuthBridge
 
                         if (
                                 googleIdToken == null ||
-                                googleIdToken
-                                        .trim()
-                                        .isEmpty()
+                                googleIdToken.trim().isEmpty()
                         ) {
 
                             sendError(
@@ -578,7 +597,9 @@ public final class NativeAuthBridge
                                         true
                                 );
 
+
                         try {
+
                             response.put(
                                     "type",
                                     "auth-success"
@@ -589,11 +610,6 @@ public final class NativeAuthBridge
                                     true
                             );
 
-                            /*
-                             * This token is deliberately returned
-                             * only through the origin-restricted
-                             * bridge to the official 11Play page.
-                             */
                             response.put(
                                     "googleIdToken",
                                     googleIdToken
@@ -618,6 +634,7 @@ public final class NativeAuthBridge
 
                             return;
                         }
+
 
                         sendResponse(
                                 replyProxy,
@@ -648,11 +665,7 @@ public final class NativeAuthBridge
 
                     @Override
                     public void onGoogleSignOut() {
-
-                        /*
-                         * Not expected during sign-in.
-                         * Nothing is required here.
-                         */
+                        // Not expected during sign-in.
                     }
                 }
         );
@@ -676,7 +689,7 @@ public final class NativeAuthBridge
                             String googleIdToken,
                             FirebaseUser firebaseUser
                     ) {
-                        // Not expected during sign-out.
+                        // Not expected.
                     }
 
 
@@ -685,16 +698,6 @@ public final class NativeAuthBridge
                             String code,
                             String message
                     ) {
-
-                        /*
-                         * GoogleAuthManager currently treats
-                         * Credential Manager cleanup failure as
-                         * successful logout because Firebase has
-                         * already been signed out.
-
-                         * This callback is retained for future
-                         * compatibility.
-                         */
 
                         sendError(
                                 replyProxy,
@@ -720,7 +723,9 @@ public final class NativeAuthBridge
                                         true
                                 );
 
+
                         try {
+
                             response.put(
                                     "type",
                                     "auth-sign-out"
@@ -735,6 +740,7 @@ public final class NativeAuthBridge
                             // Base response remains valid.
                         }
 
+
                         sendResponse(
                                 replyProxy,
                                 response
@@ -742,6 +748,361 @@ public final class NativeAuthBridge
                     }
                 }
         );
+    }
+
+
+    /* =====================================================
+       11PLAY NATIVE SHARE
+
+       Only the official 11Play page can reach this method.
+
+       Result:
+       Android system Sharesheet opens with compatible apps:
+
+       - WhatsApp
+       - Messenger
+       - Telegram
+       - Gmail
+       - Messages
+       - Other installed sharing apps
+
+       Third-party websites cannot call this bridge.
+    ===================================================== */
+
+    private void handleShare(
+            JSONObject request,
+            JavaScriptReplyProxy replyProxy,
+            String requestId
+    ) {
+
+        if (request == null) {
+
+            sendError(
+                    replyProxy,
+                    ACTION_SHARE,
+                    requestId,
+                    "invalid-share-request",
+                    "Share request is invalid."
+            );
+
+            return;
+        }
+
+
+        String title =
+                truncate(
+                        safeString(
+                                request.optString(
+                                        "title",
+                                        ""
+                                )
+                        ),
+                        MAX_SHARE_TITLE_LENGTH
+                );
+
+
+        String text =
+                truncate(
+                        safeString(
+                                request.optString(
+                                        "text",
+                                        ""
+                                )
+                        ),
+                        MAX_SHARE_TEXT_LENGTH
+                );
+
+
+        String url =
+                truncate(
+                        safeString(
+                                request.optString(
+                                        "url",
+                                        ""
+                                )
+                        ),
+                        MAX_SHARE_URL_LENGTH
+                );
+
+
+        /* =============================================
+           DEFAULT SHARE URL
+
+           If website supplies no URL, use official 11Play.
+        ============================================== */
+
+        if (url.isEmpty()) {
+
+            url =
+                    AppConfig.START_URL;
+        }
+
+
+        /* =============================================
+           ONLY ALLOW HTTP/HTTPS SHARE URL
+        ============================================== */
+
+        if (
+                !url.isEmpty() &&
+                !isHttpUrl(
+                        url
+                )
+        ) {
+
+            url =
+                    AppConfig.START_URL;
+        }
+
+
+        /* =============================================
+           BUILD SHARE CONTENT
+        ============================================== */
+
+        String shareContent =
+                buildShareContent(
+                        text,
+                        url
+                );
+
+
+        if (
+                shareContent.isEmpty()
+        ) {
+
+            shareContent =
+                    AppConfig.START_URL;
+        }
+
+
+        /* =============================================
+           SEND INTENT
+        ============================================== */
+
+        Intent sendIntent =
+                new Intent(
+                        Intent.ACTION_SEND
+                );
+
+
+        sendIntent.setType(
+                "text/plain"
+        );
+
+
+        sendIntent.putExtra(
+                Intent.EXTRA_TEXT,
+                shareContent
+        );
+
+
+        if (
+                !title.isEmpty()
+        ) {
+
+            sendIntent.putExtra(
+                    Intent.EXTRA_SUBJECT,
+                    title
+            );
+        }
+
+
+        Intent chooser =
+                Intent.createChooser(
+                        sendIntent,
+                        title.isEmpty()
+                                ? "Share 11Play"
+                                : title
+                );
+
+
+        Context context =
+                webView.getContext();
+
+
+        if (
+                !(context instanceof Activity)
+        ) {
+
+            chooser.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+            );
+        }
+
+
+        try {
+
+            context.startActivity(
+                    chooser
+            );
+
+
+            JSONObject response =
+                    createBaseResponse(
+                            ACTION_SHARE,
+                            requestId,
+                            true
+                    );
+
+
+            try {
+
+                response.put(
+                        "type",
+                        "share-opened"
+                );
+
+            } catch (Exception ignored) {
+                // Base response remains valid.
+            }
+
+
+            sendResponse(
+                    replyProxy,
+                    response
+            );
+
+
+        } catch (
+                ActivityNotFoundException error
+        ) {
+
+            sendError(
+                    replyProxy,
+                    ACTION_SHARE,
+                    requestId,
+                    "share-app-unavailable",
+                    "No compatible sharing application was found."
+            );
+
+
+        } catch (
+                Exception error
+        ) {
+
+            sendError(
+                    replyProxy,
+                    ACTION_SHARE,
+                    requestId,
+                    "share-failed",
+                    "Android sharing could not be opened."
+            );
+        }
+    }
+
+
+    /* =====================================================
+       BUILD SHARE CONTENT
+    ===================================================== */
+
+    private String buildShareContent(
+            String text,
+            String url
+    ) {
+
+        String safeText =
+                safeString(
+                        text
+                );
+
+
+        String safeUrl =
+                safeString(
+                        url
+                );
+
+
+        if (
+                safeText.isEmpty() &&
+                safeUrl.isEmpty()
+        ) {
+
+            return "";
+        }
+
+
+        if (
+                safeText.isEmpty()
+        ) {
+
+            return safeUrl;
+        }
+
+
+        if (
+                safeUrl.isEmpty()
+        ) {
+
+            return safeText;
+        }
+
+
+        /*
+         * Avoid duplicating URL if website already included
+         * it in the share text.
+         */
+
+        if (
+                safeText.contains(
+                        safeUrl
+                )
+        ) {
+
+            return safeText;
+        }
+
+
+        return safeText
+                + "\n\n"
+                + safeUrl;
+    }
+
+
+    /* =====================================================
+       HTTP URL CHECK
+    ===================================================== */
+
+    private boolean isHttpUrl(
+            String value
+    ) {
+
+        String url =
+                safeString(
+                        value
+                );
+
+
+        if (url.isEmpty()) {
+
+            return false;
+        }
+
+
+        try {
+
+            Uri uri =
+                    Uri.parse(
+                            url
+                    );
+
+
+            String scheme =
+                    safeLower(
+                            uri.getScheme()
+                    );
+
+
+            return "https".equals(
+                    scheme
+            ) ||
+                    "http".equals(
+                            scheme
+                    );
+
+
+        } catch (Exception ignored) {
+
+            return false;
+        }
     }
 
 
@@ -756,12 +1117,14 @@ public final class NativeAuthBridge
         JSONObject user =
                 new JSONObject();
 
+
         if (
-                firebaseUser ==
-                        null
+                firebaseUser == null
         ) {
+
             return user;
         }
+
 
         try {
 
@@ -790,6 +1153,7 @@ public final class NativeAuthBridge
             Uri photoUri =
                     firebaseUser.getPhotoUrl();
 
+
             putNullable(
                     user,
                     "photoUrl",
@@ -801,21 +1165,20 @@ public final class NativeAuthBridge
 
             user.put(
                     "emailVerified",
-                    firebaseUser
-                            .isEmailVerified()
+                    firebaseUser.isEmailVerified()
             );
 
 
             user.put(
                     "anonymous",
-                    firebaseUser
-                            .isAnonymous()
+                    firebaseUser.isAnonymous()
             );
 
 
         } catch (Exception ignored) {
-            // Return whatever safe fields were created.
+            // Return available safe fields.
         }
+
 
         return user;
     }
@@ -833,6 +1196,7 @@ public final class NativeAuthBridge
 
         JSONObject response =
                 new JSONObject();
+
 
         try {
 
@@ -855,9 +1219,11 @@ public final class NativeAuthBridge
                     )
             );
 
+
         } catch (Exception ignored) {
-            // JSONObject remains usable.
+            // JSONObject remains valid.
         }
+
 
         return response;
     }
@@ -878,11 +1244,12 @@ public final class NativeAuthBridge
                         false
                 );
 
+
         try {
 
             response.put(
                     "type",
-                    "auth-error"
+                    "native-error"
             );
 
             response.put(
@@ -899,9 +1266,11 @@ public final class NativeAuthBridge
                     )
             );
 
+
         } catch (Exception ignored) {
             // Send base response.
         }
+
 
         sendResponse(
                 replyProxy,
@@ -919,13 +1288,17 @@ public final class NativeAuthBridge
                 replyProxy == null ||
                 response == null
         ) {
+
             return;
         }
 
+
         try {
+
             replyProxy.postMessage(
                     response.toString()
             );
+
 
         } catch (Exception ignored) {
             // Page may have navigated away.
@@ -942,27 +1315,27 @@ public final class NativeAuthBridge
     ) {
 
         if (
-                sourceOrigin ==
-                        null
+                sourceOrigin == null
         ) {
+
             return false;
         }
 
+
         String scheme =
                 safeLower(
-                        sourceOrigin
-                                .getScheme()
+                        sourceOrigin.getScheme()
                 );
+
 
         String host =
                 safeLower(
-                        sourceOrigin
-                                .getHost()
+                        sourceOrigin.getHost()
                 );
 
+
         int port =
-                sourceOrigin
-                        .getPort();
+                sourceOrigin.getPort();
 
 
         if (
@@ -970,6 +1343,7 @@ public final class NativeAuthBridge
                         scheme
                 )
         ) {
+
             return false;
         }
 
@@ -979,21 +1353,18 @@ public final class NativeAuthBridge
                         host
                 )
         ) {
+
             return false;
         }
 
 
-        /*
-         * Android Uri returns -1 when the standard HTTPS
-         * port is omitted from the URL.
-         */
         return port == -1 ||
                 port == 443;
     }
 
 
     /* =====================================================
-       HELPERS
+       JSON HELPERS
     ===================================================== */
 
     private void putNullable(
@@ -1006,8 +1377,10 @@ public final class NativeAuthBridge
                 object == null ||
                 key == null
         ) {
+
             return;
         }
+
 
         try {
 
@@ -1021,6 +1394,7 @@ public final class NativeAuthBridge
                         JSONObject.NULL
                 );
 
+
             } else {
 
                 object.put(
@@ -1029,11 +1403,16 @@ public final class NativeAuthBridge
                 );
             }
 
+
         } catch (Exception ignored) {
-            // Ignore optional field.
+            // Optional field.
         }
     }
 
+
+    /* =====================================================
+       REQUEST ID
+    ===================================================== */
 
     private String sanitizeRequestId(
             String value
@@ -1043,6 +1422,7 @@ public final class NativeAuthBridge
                 safeString(
                         value
                 );
+
 
         if (
                 requestId.length() >
@@ -1056,9 +1436,14 @@ public final class NativeAuthBridge
                     );
         }
 
+
         return requestId;
     }
 
+
+    /* =====================================================
+       ERROR HELPERS
+    ===================================================== */
 
     private String safeErrorCode(
             String value
@@ -1069,20 +1454,25 @@ public final class NativeAuthBridge
                         value
                 );
 
+
         if (code.isEmpty()) {
-            return "native-auth-error";
+
+            return "native-error";
         }
+
 
         if (
                 code.length() >
                         100
         ) {
+
             code =
                     code.substring(
                             0,
                             100
                     );
         }
+
 
         return code;
     }
@@ -1097,14 +1487,18 @@ public final class NativeAuthBridge
                         value
                 );
 
+
         if (message.isEmpty()) {
-            return "Authentication could not be completed.";
+
+            return "Native operation could not be completed.";
         }
+
 
         if (
                 message.length() >
                         500
         ) {
+
             message =
                     message.substring(
                             0,
@@ -1112,7 +1506,40 @@ public final class NativeAuthBridge
                     );
         }
 
+
         return message;
+    }
+
+
+    /* =====================================================
+       STRING HELPERS
+    ===================================================== */
+
+    private String truncate(
+            String value,
+            int maxLength
+    ) {
+
+        String safeValue =
+                safeString(
+                        value
+                );
+
+
+        if (
+                maxLength <= 0 ||
+                safeValue.length() <=
+                        maxLength
+        ) {
+
+            return safeValue;
+        }
+
+
+        return safeValue.substring(
+                0,
+                maxLength
+        );
     }
 
 
@@ -1133,11 +1560,12 @@ public final class NativeAuthBridge
     ) {
 
         if (
-                value ==
-                        null
+                value == null
         ) {
+
             return "";
         }
+
 
         return String.valueOf(
                 value
@@ -1146,34 +1574,36 @@ public final class NativeAuthBridge
 
 
     /* =====================================================
-       DETACH / CLEANUP
+       DETACH
     ===================================================== */
 
     public void detach() {
 
         if (!attached) {
+
             return;
         }
 
+
         if (
                 WebViewFeature.isFeatureSupported(
-                        WebViewFeature
-                                .WEB_MESSAGE_LISTENER
+                        WebViewFeature.WEB_MESSAGE_LISTENER
                 )
         ) {
 
             try {
 
-                WebViewCompat
-                        .removeWebMessageListener(
-                                webView,
-                                JS_OBJECT_NAME
-                        );
+                WebViewCompat.removeWebMessageListener(
+                        webView,
+                        JS_OBJECT_NAME
+                );
+
 
             } catch (Exception ignored) {
                 // WebView may already be destroyed.
             }
         }
+
 
         attached =
                 false;
@@ -1181,6 +1611,7 @@ public final class NativeAuthBridge
 
 
     public boolean isAttached() {
+
         return attached;
     }
 }
