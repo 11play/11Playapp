@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources>
+
+    <!-- =====================================================
+         11PLAY APPLICATION THEME
+    ====================================================== -->
+
+    <style
+        name="Theme.ElevenPlay"
+        parent="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- Main application background -->
+        <item name="android:windowBackground">
+            @color/elevenplay_background
+        </item>
+
+        <!-- Status bar -->
+        <item name="android:statusBarColor">
+            @color/elevenplay_white
+        </item>
+
+        <item name="android:windowLightStatusBar">
+            true
+        </item>
+
+        <!-- Navigation bar -->
+        <item name="android:navigationBarColor">
+            @color/elevenplay_white
+        </item>
+
+        <!-- Prevent default action bar -->
+        <item name="android:windowActionModeOverlay">
+            true
+        </item>
+
+        <!-- General window behavior -->
+        <item name="android:windowNoTitle">
+            true
+        </item>
+
+        <item name="android:colorAccent">
+            @color/elevenplay_blue
+        </item>
+
+        <!-- Default font -->
+        <item name="android:fontFamily">
+            sans
+        </item>
+
+    </style>
+
+</resources>
