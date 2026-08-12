@@ -13,9 +13,13 @@ import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
@@ -41,6 +45,7 @@ import java.util.Set;
 
    Responsibilities:
    - Load official 11Play website inside WebView
+   - Protect website UI from Android status/navigation bars
    - Configure secure modern WebView settings
    - Enable JavaScript / DOM storage / cookies
    - Support tawk.to Live Chat
@@ -87,6 +92,8 @@ public final class MainActivity
     /* =====================================================
        VIEWS
     ===================================================== */
+
+    private FrameLayout rootContainer;
 
     private WebView webView;
 
@@ -137,6 +144,11 @@ public final class MainActivity
            FIND VIEWS
         ============================================== */
 
+        rootContainer =
+                findViewById(
+                        R.id.rootContainer
+                );
+
         webView =
                 findViewById(
                         R.id.webView
@@ -146,6 +158,26 @@ public final class MainActivity
                 findViewById(
                         R.id.pageProgress
                 );
+
+
+        /* =============================================
+           SYSTEM SAFE AREA
+
+           CRITICAL FOR ANDROID 15 / 16
+
+           Prevents website header and bottom navigation
+           from being placed underneath:
+
+           - Android status bar
+           - Android navigation bar
+           - Display cutout / notch
+
+           This means website buttons remain fully
+           clickable and cannot conflict with Android's
+           Back / Home / Recent buttons.
+        ============================================== */
+
+        configureSystemInsets();
 
 
         /* =============================================
@@ -209,6 +241,100 @@ public final class MainActivity
 
 
     /* =====================================================
+       SYSTEM WINDOW INSETS
+
+       Android 15+ enforces edge-to-edge for applications
+       targeting modern SDK versions.
+
+       Android 16 / targetSdk 36 cannot rely on opting out
+       of edge-to-edge.
+
+       Therefore we explicitly reserve the safe area around
+       the WebView.
+
+       Result:
+
+       ┌──────────────────────────┐
+       │ Android Status Bar       │
+       ├──────────────────────────┤
+       │ 11Play Website Header    │
+       │                          │
+       │ Website Content          │
+       │                          │
+       │ 11Play Bottom Navigation │
+       ├──────────────────────────┤
+       │ Android Navigation Bar   │
+       └──────────────────────────┘
+    ===================================================== */
+
+    private void configureSystemInsets() {
+
+        if (
+                rootContainer ==
+                        null
+        ) {
+            return;
+        }
+
+
+        ViewCompat.setOnApplyWindowInsetsListener(
+                rootContainer,
+                (
+                        view,
+                        windowInsets
+                ) -> {
+
+                    /* =================================
+                       STATUS + NAVIGATION + CUTOUT
+                    ================================== */
+
+                    Insets safeInsets =
+                            windowInsets.getInsets(
+                                    WindowInsetsCompat.Type.systemBars()
+                                            |
+                                    WindowInsetsCompat.Type.displayCutout()
+                            );
+
+
+                    /* =================================
+                       APPLY SAFE PADDING
+
+                       WebView viewport is now physically
+                       separated from Android system UI.
+                    ================================== */
+
+                    view.setPadding(
+                            safeInsets.left,
+                            safeInsets.top,
+                            safeInsets.right,
+                            safeInsets.bottom
+                    );
+
+
+                    /*
+                     * Do not consume the insets.
+                     *
+                     * Returning the original WindowInsets
+                     * keeps normal Android inset dispatch
+                     * behavior intact.
+                     */
+
+                    return windowInsets;
+                }
+        );
+
+
+        /*
+         * Request an inset pass immediately.
+         */
+
+        ViewCompat.requestApplyInsets(
+                rootContainer
+        );
+    }
+
+
+    /* =====================================================
        WEBVIEW SETTINGS
     ===================================================== */
 
@@ -246,11 +372,6 @@ public final class MainActivity
 
         /* =============================================
            FILE / CONTENT ACCESS
-
-           Direct file:// access is disabled.
-
-           content:// access is required for selected
-           Android files uploaded through WebView.
         ============================================== */
 
         settings.setAllowFileAccess(
@@ -264,8 +385,6 @@ public final class MainActivity
 
         /* =============================================
            MIXED CONTENT
-
-           Main WebView remains HTTPS-only.
         ============================================== */
 
         if (
@@ -288,9 +407,6 @@ public final class MainActivity
 
         /* =============================================
            MEDIA
-
-           Allows hosted chat/media content to play
-           without unnecessary WebView restrictions.
         ============================================== */
 
         settings.setMediaPlaybackRequiresUserGesture(
@@ -343,10 +459,6 @@ public final class MainActivity
 
         /* =============================================
            MULTIPLE WINDOWS
-
-           External navigation is controlled by our
-           WebViewClient instead of arbitrary child
-           WebViews.
         ============================================== */
 
         settings.setSupportMultipleWindows(
@@ -373,6 +485,7 @@ public final class MainActivity
         String suffix =
                 AppConfig.USER_AGENT_SUFFIX;
 
+
         if (
                 currentUserAgent != null &&
                 suffix != null &&
@@ -391,9 +504,6 @@ public final class MainActivity
 
         /* =============================================
            COOKIES
-
-           Third-party cookies are required by some
-           hosted integrations such as Live Chat.
         ============================================== */
 
         CookieManager cookieManager =
@@ -412,8 +522,6 @@ public final class MainActivity
 
         /* =============================================
            DEBUGGING
-
-           Enabled only for debug builds.
         ============================================== */
 
         WebView.setWebContentsDebuggingEnabled(
@@ -533,8 +641,6 @@ public final class MainActivity
 
     /* =====================================================
        LEGACY DOWNLOAD PERMISSION
-
-       Android 9 and below only.
     ===================================================== */
 
     private void requestLegacyDownloadPermission() {
@@ -631,18 +737,6 @@ public final class MainActivity
 
     /* =====================================================
        FILE CHOOSER
-
-       Called by ElevenPlayWebChromeClient when the website
-       or tawk.to Live Chat opens:
-
-           <input type="file">
-
-       Android system picker can provide:
-       - Screenshot
-       - Photo
-       - Video
-       - Document
-       - Other supported files
     ===================================================== */
 
     @Override
@@ -659,10 +753,6 @@ public final class MainActivity
             return false;
         }
 
-
-        /* =============================================
-           CANCEL PREVIOUS UNFINISHED REQUEST
-        ============================================== */
 
         cancelActiveFileChooser();
 
@@ -851,12 +941,6 @@ public final class MainActivity
 
     /* =====================================================
        SANITIZE SELECTED URIS
-
-       Only content:// URIs returned by Android's picker
-       are accepted.
-
-       Duplicate entries are removed and the result count
-       is capped.
     ===================================================== */
 
     private Uri[] sanitizeSelectedUris(
@@ -993,7 +1077,7 @@ public final class MainActivity
         } catch (
                 Exception ignored
         ) {
-            // Web page may already have navigated away.
+            // Page may already have navigated away.
         }
     }
 
@@ -1035,16 +1119,6 @@ public final class MainActivity
 
     /* =====================================================
        NATIVE AUTH JAVASCRIPT
-
-       Reads:
-
-           assets/native-auth-bridge.js
-
-       and injects it only into:
-
-           https://11play.github.io
-
-       The script is registered before any page is loaded.
     ===================================================== */
 
     private void installNativeAuthJavaScript() {
@@ -1088,11 +1162,7 @@ public final class MainActivity
         } catch (
                 Exception ignored
         ) {
-            /*
-             * Do not crash the app if the installed
-             * WebView implementation cannot register
-             * the document-start script.
-             */
+            // Do not crash if unsupported.
         }
     }
 
@@ -1236,7 +1306,7 @@ public final class MainActivity
             } catch (
                     Exception ignored
             ) {
-                // Activity state will still be saved.
+                // Activity state still saves.
             }
         }
 
@@ -1249,10 +1319,6 @@ public final class MainActivity
 
     /* =====================================================
        BACK BUTTON
-
-       Navigate backward inside WebView first.
-
-       Exit Activity only when no WebView history remains.
     ===================================================== */
 
     @SuppressWarnings("deprecation")
@@ -1386,6 +1452,10 @@ public final class MainActivity
             webView =
                     null;
         }
+
+
+        rootContainer =
+                null;
 
 
         super.onDestroy();
