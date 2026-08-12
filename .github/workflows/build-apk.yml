@@ -3,13 +3,9 @@ name: Build 11Play APK
 on:
   workflow_dispatch:
 
-  push:
-    branches:
-      - main
-
 jobs:
   build-apk:
-    name: Build Android APK
+    name: Build Signed 11Play APK
     runs-on: ubuntu-latest
 
     permissions:
@@ -18,7 +14,7 @@ jobs:
     steps:
 
       # =====================================================
-      # CHECKOUT PROJECT
+      # CHECKOUT
       # =====================================================
 
       - name: Checkout repository
@@ -30,7 +26,7 @@ jobs:
       # =====================================================
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -58,8 +54,8 @@ jobs:
       # =====================================================
       # GRADLE
       #
-      # AGP 8.13.2 requires Gradle 8.13.
-      # No gradlew file is required by this workflow.
+      # Android Gradle Plugin 8.13.2
+      # requires Gradle 8.13 and JDK 17.
       # =====================================================
 
       - name: Setup Gradle 8.13
@@ -69,112 +65,196 @@ jobs:
 
 
       # =====================================================
-      # FIREBASE GOOGLE SERVICES
-      #
-      # google-services.json is intentionally NOT committed
-      # into the GitHub repository.
-      #
-      # Later we will create GitHub Secret:
-      #
-      # GOOGLE_SERVICES_JSON_B64
-      #
-      # The workflow recreates:
-      #
-      # app/google-services.json
-      #
-      # during the build only.
-      # =====================================================
-
-      - name: Create google-services.json
-        shell: bash
-        env:
-          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
-
-        run: |
-          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "ERROR: GOOGLE_SERVICES_JSON_B64 secret is missing."
-            exit 1
-          fi
-
-          echo "$GOOGLE_SERVICES_JSON_B64" \
-            | base64 --decode \
-            > app/google-services.json
-
-          if [ ! -s app/google-services.json ]; then
-            echo "ERROR: google-services.json could not be created."
-            exit 1
-          fi
-
-          echo "google-services.json created successfully."
-
-
-      # =====================================================
       # VALIDATE PROJECT
       # =====================================================
-
-      - name: Show Gradle version
-        run: gradle --version
-
 
       - name: Validate Android project
         shell: bash
         run: |
           test -f settings.gradle
           test -f build.gradle
+          test -f gradle.properties
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
+          test -f app/google-services.json
+
+          echo "Android project files found."
+          echo "google-services.json found."
 
 
       # =====================================================
-      # BUILD DEBUG APK
+      # RESTORE PERMANENT SIGNING KEY
       #
-      # Debug APK can be installed directly for testing.
+      # Required GitHub Secrets:
+      #
+      # SIGNING_KEYSTORE_B64
+      # SIGNING_KEY_PASSWORD
+      #
+      # Alias:
+      # 11play
       # =====================================================
 
-      - name: Build debug APK
-        run: gradle clean assembleDebug --stacktrace
-
-
-      # =====================================================
-      # FIND APK
-      # =====================================================
-
-      - name: Verify APK
+      - name: Restore 11Play signing keystore
         shell: bash
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: APK was not generated."
+          if [ -z "$SIGNING_KEYSTORE_B64" ]; then
+            echo "ERROR: SIGNING_KEYSTORE_B64 secret is missing."
             exit 1
           fi
 
-          echo "APK generated:"
+          if [ -z "$SIGNING_KEY_PASSWORD" ]; then
+            echo "ERROR: SIGNING_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          mkdir -p signing
+
+          printf '%s' "$SIGNING_KEYSTORE_B64" \
+            | base64 --decode \
+            > signing/11play-release.jks
+
+          if [ ! -s signing/11play-release.jks ]; then
+            echo "ERROR: Signing keystore could not be restored."
+            exit 1
+          fi
+
+          keytool \
+            -list \
+            -keystore signing/11play-release.jks \
+            -storepass "$SIGNING_KEY_PASSWORD" \
+            -alias 11play \
+            >/dev/null
+
+          echo "Permanent signing keystore verified."
+
+
+      # =====================================================
+      # SHOW GRADLE VERSION
+      # =====================================================
+
+      - name: Show Gradle version
+        run: gradle --version
+
+
+      # =====================================================
+      # BUILD UNSIGNED RELEASE APK
+      # =====================================================
+
+      - name: Build release APK
+        run: gradle clean assembleRelease --stacktrace
+
+
+      # =====================================================
+      # LOCATE UNSIGNED APK
+      # =====================================================
+
+      - name: Locate release APK
+        shell: bash
+        run: |
+          APK_PATH="$(find app/build/outputs/apk/release \
+            -type f \
+            -name '*.apk' \
+            | head -n 1)"
+
+          if [ -z "$APK_PATH" ]; then
+            echo "ERROR: Release APK was not generated."
+            exit 1
+          fi
+
+          echo "UNSIGNED_APK=$APK_PATH" >> "$GITHUB_ENV"
+
+          echo "Release APK found:"
           ls -lh "$APK_PATH"
 
 
       # =====================================================
-      # RENAME APK
+      # ZIPALIGN
       # =====================================================
 
-      - name: Rename APK
+      - name: Align release APK
         shell: bash
         run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+
           mkdir -p apk-output
 
-          cp \
-            app/build/outputs/apk/debug/app-debug.apk \
-            apk-output/11Play-debug.apk
+          "$BUILD_TOOLS/zipalign" \
+            -f \
+            -v \
+            4 \
+            "$UNSIGNED_APK" \
+            apk-output/11Play-aligned.apk
 
 
       # =====================================================
-      # UPLOAD APK TO GITHUB ACTIONS
+      # SIGN APK
+      # =====================================================
+
+      - name: Sign 11Play APK
+        shell: bash
+        env:
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks signing/11play-release.jks \
+            --ks-key-alias 11play \
+            --ks-pass env:SIGNING_KEY_PASSWORD \
+            --key-pass env:SIGNING_KEY_PASSWORD \
+            --out apk-output/11Play.apk \
+            apk-output/11Play-aligned.apk
+
+
+      # =====================================================
+      # VERIFY APK SIGNATURE
+      # =====================================================
+
+      - name: Verify signed APK
+        shell: bash
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+
+          "$BUILD_TOOLS/apksigner" verify \
+            --verbose \
+            --print-certs \
+            apk-output/11Play.apk
+
+          if [ ! -s apk-output/11Play.apk ]; then
+            echo "ERROR: Signed APK does not exist."
+            exit 1
+          fi
+
+          echo "========================================"
+          echo "11Play APK successfully built and signed."
+          echo "========================================"
+
+          ls -lh apk-output/11Play.apk
+
+
+      # =====================================================
+      # REMOVE TEMPORARY SENSITIVE FILES
+      # =====================================================
+
+      - name: Remove temporary signing files
+        if: always()
+        shell: bash
+        run: |
+          rm -rf signing
+          rm -f apk-output/11Play-aligned.apk
+
+
+      # =====================================================
+      # UPLOAD FINAL APK
       # =====================================================
 
       - name: Upload 11Play APK
         uses: actions/upload-artifact@v4
         with:
-          name: 11Play-Android-APK
-          path: apk-output/11Play-debug.apk
+          name: 11Play-APK
+          path: apk-output/11Play.apk
           if-no-files-found: error
           retention-days: 30
