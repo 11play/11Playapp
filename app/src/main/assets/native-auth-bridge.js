@@ -1,26 +1,33 @@
 /* =========================================================
-   11PLAY — NATIVE AUTH BRIDGE
+   11PLAY — NATIVE APP BRIDGE
    File: app/src/main/assets/native-auth-bridge.js
 
    Responsibilities:
    - Communicate with Android NativeAuthBridge
-   - Launch native Google Sign-In from the WebView
-   - Convert Google ID token into Firebase Web Auth session
-   - Keep native Firebase Auth and Web Firebase Auth aligned
-   - Intercept Firebase Google signInWithPopup inside APK
-   - Synchronize Firebase Web sign-out with native sign-out
-   - Expose a small safe API to the 11Play page
+   - Handle native Google Sign-In for 11Play
+   - Establish Firebase Web Auth session
+   - Keep native Firebase + Web Firebase logout synchronized
+   - Convert 11Play navigator.share() to Android Sharesheet
+   - Handle 11Play Invite Your Friend share button
+   - Never affect third-party websites
 
-   Native bridge object:
+   Native object:
        window.ElevenPlayNativeAuth
 
-   Public helper:
+   Public API:
        window.ElevenPlayAppAuth
 
+   Supported native actions:
+       ping
+       getAuthState
+       signIn
+       signOut
+       share
+
    Important:
-   - This script must only be injected on:
+   - This script is injected only on:
        https://11play.github.io
-   - Never log Google ID tokens.
+   - Google ID tokens are never logged.
 ========================================================= */
 
 (function () {
@@ -31,11 +38,11 @@
        PREVENT DUPLICATE INITIALIZATION
     ===================================================== */
 
-    if (window.__ELEVENPLAY_NATIVE_AUTH_BRIDGE__) {
+    if (window.__ELEVENPLAY_NATIVE_APP_BRIDGE__) {
         return;
     }
 
-    window.__ELEVENPLAY_NATIVE_AUTH_BRIDGE__ = true;
+    window.__ELEVENPLAY_NATIVE_APP_BRIDGE__ = true;
 
 
     /* =====================================================
@@ -80,12 +87,22 @@
     let originalSignInWithCredential =
         null;
 
+    let originalNavigatorShare =
+        null;
+
+    let nativeShareInstalled =
+        false;
+
+    let inviteClickInstalled =
+        false;
+
 
     /* =====================================================
-       HELPERS
+       BASIC HELPERS
     ===================================================== */
 
     function safeString(value) {
+
         if (
             value === null ||
             value === undefined
@@ -98,6 +115,7 @@
 
 
     function createRequestId() {
+
         const randomPart =
             Math.random()
                 .toString(36)
@@ -120,21 +138,23 @@
         code,
         message
     ) {
+
         const error =
             new Error(
                 safeString(message) ||
-                "Authentication could not be completed."
+                "Operation could not be completed."
             );
 
         error.code =
             safeString(code) ||
-            "native-auth-error";
+            "native-error";
 
         return error;
     }
 
 
     function nativeBridgeAvailable() {
+
         const bridge =
             window[NATIVE_OBJECT_NAME];
 
@@ -147,23 +167,28 @@
 
 
     /* =====================================================
-       SEND MESSAGE TO ANDROID
+       NATIVE REQUEST
     ===================================================== */
 
     function sendNativeRequest(
         action,
         payload
     ) {
+
         return new Promise(
-            (resolve, reject) => {
+            function (
+                resolve,
+                reject
+            ) {
 
                 if (
                     !nativeBridgeAvailable()
                 ) {
+
                     reject(
                         createError(
                             "native-bridge-unavailable",
-                            "Native authentication is unavailable."
+                            "Native app bridge is unavailable."
                         )
                     );
 
@@ -201,14 +226,16 @@
                                 return;
                             }
 
+
                             pendingRequests.delete(
                                 requestId
                             );
 
+
                             reject(
                                 createError(
-                                    "native-auth-timeout",
-                                    "Authentication request timed out."
+                                    "native-request-timeout",
+                                    "Native request timed out."
                                 )
                             );
 
@@ -251,6 +278,7 @@
                         requestId
                     );
 
+
                     reject(
                         createError(
                             "native-message-failed",
@@ -267,7 +295,7 @@
 
 
     /* =====================================================
-       RECEIVE RESPONSE FROM ANDROID
+       NATIVE RESPONSE
     ===================================================== */
 
     function handleNativeMessage(event) {
@@ -311,6 +339,7 @@
             typeof response !==
                 "object"
         ) {
+
             return;
         }
 
@@ -327,6 +356,7 @@
                 requestId
             )
         ) {
+
             return;
         }
 
@@ -345,6 +375,7 @@
         if (
             pending.timeoutId
         ) {
+
             window.clearTimeout(
                 pending.timeoutId
             );
@@ -352,8 +383,7 @@
 
 
         if (
-            response.ok ===
-                true
+            response.ok === true
         ) {
 
             pending.resolve(
@@ -374,7 +404,7 @@
 
 
     /* =====================================================
-       ATTACH NATIVE MESSAGE RECEIVER
+       ATTACH NATIVE RECEIVER
     ===================================================== */
 
     function attachNativeReceiver() {
@@ -382,6 +412,7 @@
         if (
             !nativeBridgeAvailable()
         ) {
+
             return false;
         }
 
@@ -391,6 +422,7 @@
             window[NATIVE_OBJECT_NAME]
                 .onmessage =
                 handleNativeMessage;
+
 
             return true;
 
@@ -402,13 +434,7 @@
 
 
     /* =====================================================
-       FIREBASE DETECTION
-
-       Current 11Play website uses Firebase Web Auth.
-
-       We wait until the Firebase compatibility API exists:
-
-           firebase.auth()
+       FIREBASE AUTH DETECTION
     ===================================================== */
 
     function getFirebaseAuth() {
@@ -420,6 +446,7 @@
                 typeof window.firebase.auth !==
                     "function"
             ) {
+
                 return null;
             }
 
@@ -428,12 +455,7 @@
                 window.firebase.auth();
 
 
-            if (!auth) {
-                return null;
-            }
-
-
-            return auth;
+            return auth || null;
 
         } catch (error) {
 
@@ -445,7 +467,10 @@
     function waitForFirebaseAuth() {
 
         return new Promise(
-            (resolve, reject) => {
+            function (
+                resolve,
+                reject
+            ) {
 
                 const existingAuth =
                     getFirebaseAuth();
@@ -497,6 +522,7 @@
                                     timer
                                 );
 
+
                                 reject(
                                     createError(
                                         "firebase-auth-unavailable",
@@ -526,27 +552,14 @@
         }
 
 
-        const providerId =
-            safeString(
-                provider.providerId
-            );
-
-
-        return providerId ===
-            "google.com";
+        return safeString(
+            provider.providerId
+        ) === "google.com";
     }
 
 
     /* =====================================================
-       CREATE FIREBASE WEB SESSION
-
-       Android returns a Google ID token.
-
-       Firebase Web SDK receives the same token:
-
-           GoogleAuthProvider.credential(idToken)
-
-       and creates the authenticated WebView Firebase session.
+       FIREBASE WEB SESSION
     ===================================================== */
 
     async function authenticateFirebaseWeb(
@@ -603,11 +616,6 @@
             );
         }
 
-
-        /*
-         * Use the original function when Firebase has
-         * already been patched to avoid recursion.
-         */
 
         if (
             auth ===
@@ -677,7 +685,7 @@
             );
 
 
-        dispatchAuthEvent(
+        dispatchEventSafe(
             "11play:native-auth-success",
             {
                 user:
@@ -693,16 +701,11 @@
 
     /* =====================================================
        SIGN OUT
-
-       First close the Firebase Web SDK session.
-
-       Then close Android native Firebase/Credential Manager
-       authentication state.
     ===================================================== */
 
     async function signOut() {
 
-        let auth =
+        const auth =
             getFirebaseAuth();
 
 
@@ -741,17 +744,13 @@
             } catch (error) {
 
                 /*
-                 * Web Firebase is already signed out.
-                 *
-                 * Do not restore the web session merely
-                 * because native credential-state cleanup
-                 * failed.
+                 * Web Firebase session is already signed out.
                  */
             }
         }
 
 
-        dispatchAuthEvent(
+        dispatchEventSafe(
             "11play:native-auth-signout",
             {}
         );
@@ -759,7 +758,7 @@
 
 
     /* =====================================================
-       NATIVE AUTH STATE
+       AUTH STATE
     ===================================================== */
 
     async function getNativeAuthState() {
@@ -820,56 +819,386 @@
 
 
     /* =====================================================
-       CUSTOM EVENTS
-
-       Existing or future website modules may listen to:
-
-       11play:native-auth-ready
-       11play:native-auth-success
-       11play:native-auth-signout
+       NATIVE SHARE
     ===================================================== */
 
-    function dispatchAuthEvent(
-        eventName,
-        detail
+    async function shareNative(
+        shareData
     ) {
+
+        if (
+            !nativeBridgeAvailable()
+        ) {
+
+            throw createError(
+                "native-share-unavailable",
+                "Native sharing is unavailable."
+            );
+        }
+
+
+        attachNativeReceiver();
+
+
+        const source =
+            (
+                shareData &&
+                typeof shareData ===
+                    "object"
+            )
+                ? shareData
+                : {};
+
+
+        const title =
+            safeString(
+                source.title
+            );
+
+
+        const text =
+            safeString(
+                source.text
+            );
+
+
+        let url =
+            safeString(
+                source.url
+            );
+
+
+        if (!url) {
+
+            url =
+                window.location.href ||
+                "https://11play.github.io/11play/";
+        }
+
+
+        return await sendNativeRequest(
+            "share",
+            {
+                title:
+                    title,
+
+                text:
+                    text,
+
+                url:
+                    url
+            }
+        );
+    }
+
+
+    /* =====================================================
+       INSTALL navigator.share OVERRIDE
+
+       11Play website may use:
+
+           navigator.share({
+               title: "...",
+               text: "...",
+               url: "..."
+           });
+
+       Inside APK this becomes Android native Sharesheet.
+
+       This script exists ONLY on the official 11Play origin,
+       so third-party websites remain untouched.
+    ===================================================== */
+
+    function installNativeShare() {
+
+        if (
+            nativeShareInstalled ||
+            !nativeBridgeAvailable()
+        ) {
+
+            return;
+        }
+
+
+        nativeShareInstalled =
+            true;
+
 
         try {
 
-            window.dispatchEvent(
-                new CustomEvent(
-                    eventName,
-                    {
-                        detail:
-                            detail || {}
-                    }
-                )
-            );
+            if (
+                navigator &&
+                typeof navigator.share ===
+                    "function"
+            ) {
+
+                originalNavigatorShare =
+                    navigator.share.bind(
+                        navigator
+                    );
+            }
 
         } catch (error) {
-            // Optional event only.
+
+            originalNavigatorShare =
+                null;
+        }
+
+
+        const nativeShareFunction =
+            function (
+                shareData
+            ) {
+
+                return shareNative(
+                    shareData || {}
+                ).then(
+                    function () {
+
+                        /*
+                         * Web Share API resolves void.
+                         */
+                        return undefined;
+                    }
+                );
+            };
+
+
+        /*
+         * navigator.share may be defined on Navigator's
+         * prototype and may not always be directly writable.
+         */
+
+        try {
+
+            Object.defineProperty(
+                navigator,
+                "share",
+                {
+                    value:
+                        nativeShareFunction,
+
+                    writable:
+                        false,
+
+                    configurable:
+                        true
+                }
+            );
+
+            return;
+
+        } catch (error) {
+            // Try prototype fallback.
+        }
+
+
+        try {
+
+            const navigatorPrototype =
+                Object.getPrototypeOf(
+                    navigator
+                );
+
+
+            if (navigatorPrototype) {
+
+                Object.defineProperty(
+                    navigatorPrototype,
+                    "share",
+                    {
+                        value:
+                            nativeShareFunction,
+
+                        writable:
+                            false,
+
+                        configurable:
+                            true
+                    }
+                );
+            }
+
+        } catch (error) {
+            // Invite click fallback below still works.
         }
     }
 
 
     /* =====================================================
-       PATCH FIREBASE GOOGLE POPUP
+       INVITE BUTTON FALLBACK
 
-       Website code may currently call:
+       Supports elements such as:
 
-           firebase.auth()
-               .signInWithPopup(
-                   new firebase.auth.GoogleAuthProvider()
-               )
+           data-share-action="invite"
+           data-share-action="share"
 
-       Google does not support normal OAuth login inside
-       arbitrary embedded WebViews.
+       This is useful if the 11Play UI has a dedicated
+       Invite Your Friend button.
 
-       Inside the Android APK only, we replace GOOGLE popup
-       authentication with native Credential Manager.
+       We intentionally do NOT intercept generic links or
+       third-party website content.
+    ===================================================== */
 
-       Non-Google providers retain Firebase's original
-       behavior.
+    function installInviteClickHandler() {
+
+        if (inviteClickInstalled) {
+            return;
+        }
+
+
+        inviteClickInstalled =
+            true;
+
+
+        document.addEventListener(
+            "click",
+            function (
+                event
+            ) {
+
+                if (
+                    !event ||
+                    !nativeBridgeAvailable()
+                ) {
+
+                    return;
+                }
+
+
+                let target =
+                    event.target;
+
+
+                if (
+                    target &&
+                    target.nodeType ===
+                        Node.TEXT_NODE
+                ) {
+
+                    target =
+                        target.parentElement;
+                }
+
+
+                if (
+                    !target ||
+                    typeof target.closest !==
+                        "function"
+                ) {
+
+                    return;
+                }
+
+
+                const shareElement =
+                    target.closest(
+                        "[data-share-action]"
+                    );
+
+
+                if (!shareElement) {
+
+                    return;
+                }
+
+
+                const shareAction =
+                    safeString(
+                        shareElement.getAttribute(
+                            "data-share-action"
+                        )
+                    ).toLowerCase();
+
+
+                if (
+                    shareAction !==
+                        "invite" &&
+                    shareAction !==
+                        "share"
+                ) {
+
+                    return;
+                }
+
+
+                /*
+                 * Prevent the browser/WebView fallback from
+                 * opening or doing nothing.
+                 */
+
+                event.preventDefault();
+
+                event.stopPropagation();
+
+                if (
+                    typeof event.stopImmediatePropagation ===
+                        "function"
+                ) {
+
+                    event.stopImmediatePropagation();
+                }
+
+
+                const title =
+                    safeString(
+                        shareElement.getAttribute(
+                            "data-share-title"
+                        )
+                    ) ||
+                    safeString(
+                        document.title
+                    ) ||
+                    "11Play";
+
+
+                const text =
+                    safeString(
+                        shareElement.getAttribute(
+                            "data-share-text"
+                        )
+                    ) ||
+                    "11Play দেখুন";
+
+
+                const url =
+                    safeString(
+                        shareElement.getAttribute(
+                            "data-share-url"
+                        )
+                    ) ||
+                    window.location.href ||
+                    "https://11play.github.io/11play/";
+
+
+                shareNative(
+                    {
+                        title:
+                            title,
+
+                        text:
+                            text,
+
+                        url:
+                            url
+                    }
+                ).catch(
+                    function () {
+                        /*
+                         * Native share failure should not crash
+                         * the website.
+                         */
+                    }
+                );
+
+            },
+            true
+        );
+    }
+
+
+    /* =====================================================
+       FIREBASE PATCH
     ===================================================== */
 
     function patchFirebaseAuth(
@@ -880,6 +1209,7 @@
             firebasePatched ||
             !auth
         ) {
+
             return;
         }
 
@@ -898,10 +1228,9 @@
         ) {
 
             originalSignInWithCredential =
-                auth.signInWithCredential
-                    .bind(
-                        auth
-                    );
+                auth.signInWithCredential.bind(
+                    auth
+                );
         }
 
 
@@ -911,10 +1240,9 @@
         ) {
 
             originalSignInWithPopup =
-                auth.signInWithPopup
-                    .bind(
-                        auth
-                    );
+                auth.signInWithPopup.bind(
+                    auth
+                );
         }
 
 
@@ -924,10 +1252,9 @@
         ) {
 
             originalSignInWithRedirect =
-                auth.signInWithRedirect
-                    .bind(
-                        auth
-                    );
+                auth.signInWithRedirect.bind(
+                    auth
+                );
         }
 
 
@@ -937,15 +1264,14 @@
         ) {
 
             originalSignOut =
-                auth.signOut
-                    .bind(
-                        auth
-                    );
+                auth.signOut.bind(
+                    auth
+                );
         }
 
 
         /* =============================================
-           PATCH signInWithPopup
+           GOOGLE POPUP → NATIVE GOOGLE
         ============================================== */
 
         if (
@@ -977,13 +1303,7 @@
 
 
         /* =============================================
-           PATCH signInWithRedirect
-
-           For Google inside APK we perform native login
-           immediately.
-
-           The returned Promise resolves after the Firebase
-           Web session exists.
+           GOOGLE REDIRECT → NATIVE GOOGLE
         ============================================== */
 
         if (
@@ -1007,10 +1327,6 @@
                             .then(
                                 function () {
 
-                                    /*
-                                     * Firebase redirect API
-                                     * normally resolves void.
-                                     */
                                     return undefined;
                                 }
                             );
@@ -1025,9 +1341,7 @@
 
 
         /* =============================================
-           PATCH SIGN OUT
-
-           Keeps native and Firebase Web sessions aligned.
+           WEB LOGOUT → NATIVE LOGOUT
         ============================================== */
 
         if (
@@ -1060,7 +1374,7 @@
                     }
 
 
-                    dispatchAuthEvent(
+                    dispatchEventSafe(
                         "11play:native-auth-signout",
                         {}
                     );
@@ -1072,7 +1386,7 @@
             true;
 
 
-        dispatchAuthEvent(
+        dispatchEventSafe(
             "11play:native-auth-ready",
             {
                 native:
@@ -1086,9 +1400,7 @@
 
 
     /* =====================================================
-       WAIT AND PATCH FIREBASE
-
-       Script may run before Firebase scripts finish loading.
+       FIREBASE WATCHER
     ===================================================== */
 
     function startFirebasePatchWatcher() {
@@ -1125,9 +1437,11 @@
                             timer
                         );
 
+
                         patchFirebaseAuth(
                             auth
                         );
+
 
                         return;
                     }
@@ -1151,35 +1465,65 @@
 
 
     /* =====================================================
-       PUBLIC API
-
-       Available only inside the 11Play WebView page.
+       SAFE CUSTOM EVENT
     ===================================================== */
 
-    const publicApi = {
+    function dispatchEventSafe(
+        eventName,
+        detail
+    ) {
 
-        isNativeApp:
-            function () {
+        try {
 
-                return nativeBridgeAvailable();
-            },
+            window.dispatchEvent(
+                new CustomEvent(
+                    eventName,
+                    {
+                        detail:
+                            detail || {}
+                    }
+                )
+            );
+
+        } catch (error) {
+            // Optional event.
+        }
+    }
 
 
-        signInWithGoogle:
-            signInWithGoogle,
+    /* =====================================================
+       PUBLIC API
+    ===================================================== */
+
+    const publicApi =
+        {
+
+            isNativeApp:
+                function () {
+
+                    return nativeBridgeAvailable();
+                },
 
 
-        signOut:
-            signOut,
+            signInWithGoogle:
+                signInWithGoogle,
 
 
-        getAuthState:
-            getNativeAuthState,
+            signOut:
+                signOut,
 
 
-        ping:
-            ping
-    };
+            getAuthState:
+                getNativeAuthState,
+
+
+            ping:
+                ping,
+
+
+            share:
+                shareNative
+        };
 
 
     try {
@@ -1215,13 +1559,20 @@
 
     attachNativeReceiver();
 
+    installNativeShare();
+
+    installInviteClickHandler();
+
     startFirebasePatchWatcher();
 
 
-    dispatchAuthEvent(
-        "11play:native-auth-bridge-loaded",
+    dispatchEventSafe(
+        "11play:native-app-bridge-loaded",
         {
             native:
+                nativeBridgeAvailable(),
+
+            share:
                 nativeBridgeAvailable()
         }
     );
