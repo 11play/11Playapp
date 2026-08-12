@@ -3,14 +3,10 @@ package com.elevenplay.app.web;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.net.Uri;
 import android.webkit.WebResourceRequest;
-import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-
-import com.elevenplay.app.config.AppConfig;
 
 import java.util.Locale;
 
@@ -18,18 +14,32 @@ import java.util.Locale;
    11PLAY — WEBVIEW CLIENT
 
    Responsibilities:
-   - Keep official 11Play pages inside the app
-   - Keep tawk.to Live Chat pages inside the app
-   - Open Google authentication in a supported external browser
-   - Open normal external websites in the device browser
-   - Handle intent:, mailto:, tel:, sms: safely
-   - Block unsupported / malformed navigation
-   - Prevent clear-text HTTP navigation inside the WebView
+   - Keep 11Play website inside the APK
+   - Keep normal third-party websites inside the APK
+   - Keep HTTPS / HTTP browsing inside the same WebView
+   - Preserve WebView history for Android Back navigation
+   - Open Android/app-specific schemes externally
+   - Handle intent:// links safely
+   - Keep browser fallback URLs inside the WebView
 
-   Important:
-   - Google OAuth should not be forced through an embedded
-     Android WebView.
-   - Native Google authentication will be added separately.
+   Intended behavior:
+
+       11Play
+           ↓
+       Third-party website
+           ↓
+       Same 11Play WebView
+
+   External Android apps are used only for schemes such as:
+
+       tel:
+       sms:
+       mailto:
+       market:
+       whatsapp:
+       tg:
+       intent:
+
 ========================================================= */
 
 public final class ElevenPlayWebViewClient
@@ -49,7 +59,9 @@ public final class ElevenPlayWebViewClient
     public ElevenPlayWebViewClient(
             Activity activity
     ) {
+
         if (activity == null) {
+
             throw new IllegalArgumentException(
                     "Activity is required."
             );
@@ -61,25 +73,7 @@ public final class ElevenPlayWebViewClient
 
 
     /* =====================================================
-       PAGE START
-    ===================================================== */
-
-    @Override
-    public void onPageStarted(
-            WebView view,
-            String url,
-            Bitmap favicon
-    ) {
-        super.onPageStarted(
-                view,
-                url,
-                favicon
-        );
-    }
-
-
-    /* =====================================================
-       MODERN URL OVERRIDE
+       MODERN URL HANDLER
     ===================================================== */
 
     @Override
@@ -87,12 +81,16 @@ public final class ElevenPlayWebViewClient
             WebView view,
             WebResourceRequest request
     ) {
+
         if (
+                view == null ||
                 request == null ||
                 request.getUrl() == null
         ) {
+
             return true;
         }
+
 
         return handleNavigation(
                 view,
@@ -102,7 +100,7 @@ public final class ElevenPlayWebViewClient
 
 
     /* =====================================================
-       LEGACY URL OVERRIDE
+       LEGACY URL HANDLER
     ===================================================== */
 
     @SuppressWarnings("deprecation")
@@ -111,21 +109,28 @@ public final class ElevenPlayWebViewClient
             WebView view,
             String url
     ) {
+
         if (
+                view == null ||
                 url == null ||
                 url.trim().isEmpty()
         ) {
+
             return true;
         }
 
+
         try {
+
             return handleNavigation(
                     view,
                     Uri.parse(
-                            url
+                            url.trim()
                     )
             );
-        } catch (Exception error) {
+
+        } catch (Exception ignored) {
+
             return true;
         }
     }
@@ -139,29 +144,54 @@ public final class ElevenPlayWebViewClient
             WebView webView,
             Uri uri
     ) {
+
         if (
+                webView == null ||
                 uri == null
         ) {
+
             return true;
         }
+
 
         String scheme =
                 safeLower(
                         uri.getScheme()
                 );
 
-        String host =
-                safeLower(
-                        uri.getHost()
-                );
+
+        /* =================================================
+           NORMAL WEB CONTENT
+
+           CRITICAL:
+
+           return false means:
+           WebView itself loads the URL.
+
+           Therefore:
+           - 11Play stays inside app
+           - Casino/site cards stay inside app
+           - Third-party websites stay inside app
+           - Redirects stay inside app
+           - Back history remains inside WebView
+        ================================================= */
+
+        if (
+                "https".equals(
+                        scheme
+                ) ||
+                "http".equals(
+                        scheme
+                )
+        ) {
+
+            return false;
+        }
 
 
-        /* =============================================
-           ABOUT / JAVASCRIPT
-
-           WebView internal URLs may be required by
-           embedded widgets.
-        ============================================== */
+        /* =================================================
+           WEBVIEW INTERNAL SCHEMES
+        ================================================= */
 
         if (
                 "about".equals(
@@ -169,128 +199,41 @@ public final class ElevenPlayWebViewClient
                 ) ||
                 "javascript".equals(
                         scheme
+                ) ||
+                "data".equals(
+                        scheme
+                ) ||
+                "blob".equals(
+                        scheme
                 )
         ) {
+
             return false;
         }
 
 
-        /* =============================================
-           OFFICIAL 11PLAY
+        /* =================================================
+           ANDROID INTENT LINKS
 
-           Keep inside WebView.
-        ============================================== */
+           Example:
+               intent://...
 
-        if (
-                "https".equals(
-                        scheme
-                ) &&
-                AppConfig.isOfficialHost(
-                        host
-                )
-        ) {
-            return false;
-        }
+           If target Android app exists:
+               open target app.
 
-
-        /* =============================================
-           TAWK.TO LIVE CHAT
-
-           Keep inside WebView so chat remains part of
-           the 11Play app experience.
-        ============================================== */
-
-        if (
-                "https".equals(
-                        scheme
-                ) &&
-                (
-                    AppConfig.isTrustedHost(
-                            host
-                    ) ||
-                    host.endsWith(
-                            ".tawk.to"
-                    )
-                )
-        ) {
-            return false;
-        }
-
-
-        /* =============================================
-           GOOGLE AUTHENTICATION
-
-           Do NOT force Google OAuth pages into WebView.
-           Open them using the device browser.
-
-           Native Firebase Google Sign-In will later be
-           used as the primary app authentication path.
-        ============================================== */
-
-        if (
-                isGoogleAuthenticationHost(
-                        host
-                )
-        ) {
-            openExternalUri(
-                    uri
-            );
-
-            return true;
-        }
-
-
-        /* =============================================
-           HTTPS EXTERNAL WEBSITE
-
-           Normal external websites should open in the
-           user's browser instead of taking over the app.
-        ============================================== */
-
-        if (
-                "https".equals(
-                        scheme
-                )
-        ) {
-            openExternalUri(
-                    uri
-            );
-
-            return true;
-        }
-
-
-        /* =============================================
-           HTTP
-
-           11Play WebView remains HTTPS-only.
-           HTTP external URLs may be handed to another
-           installed browser if one supports them.
-        ============================================== */
-
-        if (
-                "http".equals(
-                        scheme
-                )
-        ) {
-            openExternalUri(
-                    uri
-            );
-
-            return true;
-        }
-
-
-        /* =============================================
-           ANDROID INTENT URL
-        ============================================== */
+           If target app does not exist but an HTTP/HTTPS
+           browser_fallback_url exists:
+               load fallback INSIDE 11Play WebView.
+        ================================================= */
 
         if (
                 "intent".equals(
                         scheme
                 )
         ) {
+
             handleIntentUri(
+                    webView,
                     uri.toString()
             );
 
@@ -298,24 +241,21 @@ public final class ElevenPlayWebViewClient
         }
 
 
-        /* =============================================
-           TELEPHONE / SMS / EMAIL
-        ============================================== */
+        /* =================================================
+           EXTERNAL APP SCHEMES
+
+           These are not normal websites.
+
+           They should be handed to Android so the correct
+           installed application can handle them.
+        ================================================= */
 
         if (
-                "tel".equals(
-                        scheme
-                ) ||
-                "sms".equals(
-                        scheme
-                ) ||
-                "smsto".equals(
-                        scheme
-                ) ||
-                "mailto".equals(
+                isExternalAppScheme(
                         scheme
                 )
         ) {
+
             openExternalUri(
                     uri
             );
@@ -324,15 +264,20 @@ public final class ElevenPlayWebViewClient
         }
 
 
-        /* =============================================
-           MARKET / APP LINKS
-        ============================================== */
+        /* =================================================
+           UNKNOWN CUSTOM SCHEME
+
+           Do not force unknown custom protocols into the
+           WebView.
+
+           Example:
+               customapp://something
+        ================================================= */
 
         if (
-                "market".equals(
-                        scheme
-                )
+                !scheme.isEmpty()
         ) {
+
             openExternalUri(
                     uri
             );
@@ -340,117 +285,145 @@ public final class ElevenPlayWebViewClient
             return true;
         }
 
-
-        /* =============================================
-           UNKNOWN SCHEME
-
-           Attempt external handling only.
-
-           Never inject unknown custom schemes into
-           the WebView itself.
-        ============================================== */
-
-        openExternalUri(
-                uri
-        );
 
         return true;
     }
 
 
     /* =====================================================
-       GOOGLE AUTH HOST CHECK
+       EXTERNAL APP SCHEME CHECK
     ===================================================== */
 
-    private boolean isGoogleAuthenticationHost(
-            String host
+    private boolean isExternalAppScheme(
+            String scheme
     ) {
+
         if (
-                host == null ||
-                host.isEmpty()
+                scheme == null ||
+                scheme.isEmpty()
         ) {
+
             return false;
         }
 
-        return host.equals(
-                "accounts.google.com"
-        ) ||
-                host.equals(
-                        "oauth2.googleapis.com"
-                ) ||
-                host.equals(
-                        "accounts.googleusercontent.com"
-                ) ||
-                host.endsWith(
-                        ".googleusercontent.com"
-                );
+
+        switch (scheme) {
+
+            case "tel":
+
+            case "sms":
+
+            case "smsto":
+
+            case "mailto":
+
+            case "market":
+
+            case "whatsapp":
+
+            case "tg":
+
+            case "viber":
+
+            case "fb":
+
+            case "fb-messenger":
+
+                return true;
+
+
+            default:
+
+                return false;
+        }
     }
 
 
     /* =====================================================
-       EXTERNAL URI
+       OPEN EXTERNAL ANDROID APP
     ===================================================== */
 
-    private void openExternalUri(
+    private boolean openExternalUri(
             Uri uri
     ) {
+
         if (
                 uri == null
         ) {
-            return;
+
+            return false;
         }
 
+
         try {
+
             Intent intent =
                     new Intent(
                             Intent.ACTION_VIEW,
                             uri
                     );
 
+
             intent.addCategory(
                     Intent.CATEGORY_BROWSABLE
             );
+
 
             activity.startActivity(
                     intent
             );
 
+
+            return true;
+
         } catch (
                 ActivityNotFoundException ignored
         ) {
-            // No compatible external application.
+
+            return false;
+
         } catch (
                 Exception ignored
         ) {
-            // Invalid or unsupported URI.
+
+            return false;
         }
     }
 
 
     /* =====================================================
-       INTENT URL
+       HANDLE intent:// URL
     ===================================================== */
 
     private void handleIntentUri(
+            WebView webView,
             String url
     ) {
+
         if (
+                webView == null ||
                 url == null ||
                 url.trim().isEmpty()
         ) {
+
             return;
         }
 
+
         try {
+
             Intent intent =
                     Intent.parseUri(
                             url,
                             Intent.URI_INTENT_SCHEME
                     );
 
-            intent.addCategory(
-                    Intent.CATEGORY_BROWSABLE
-            );
+
+            /*
+             * Security:
+             * Never allow a web page to force an explicit
+             * Android component or selector.
+             */
 
             intent.setComponent(
                     null
@@ -460,44 +433,71 @@ public final class ElevenPlayWebViewClient
                     null
             );
 
+            intent.addCategory(
+                    Intent.CATEGORY_BROWSABLE
+            );
+
+
+            /* =============================================
+               TRY TARGET ANDROID APP
+            ============================================== */
+
             try {
+
                 activity.startActivity(
                         intent
                 );
 
                 return;
+
             } catch (
                     ActivityNotFoundException ignored
             ) {
-                // Try browser fallback URL below.
+
+                /*
+                 * Target app is not installed.
+                 *
+                 * Check browser fallback below.
+                 */
             }
 
 
-            /* =========================================
-               BROWSER FALLBACK
-            ========================================== */
+            /* =============================================
+               FALLBACK URL
+            ============================================== */
 
             String fallbackUrl =
                     intent.getStringExtra(
                             "browser_fallback_url"
                     );
 
+
             if (
                     fallbackUrl == null ||
                     fallbackUrl.trim().isEmpty()
             ) {
+
                 return;
             }
 
+
             Uri fallbackUri =
                     Uri.parse(
-                            fallbackUrl
+                            fallbackUrl.trim()
                     );
+
 
             String fallbackScheme =
                     safeLower(
                             fallbackUri.getScheme()
                     );
+
+
+            /*
+             * IMPORTANT:
+             *
+             * HTTP/HTTPS fallback stays inside the APK.
+             */
 
             if (
                     "https".equals(
@@ -507,74 +507,37 @@ public final class ElevenPlayWebViewClient
                             fallbackScheme
                     )
             ) {
-                openExternalUri(
-                        fallbackUri
+
+                webView.loadUrl(
+                        fallbackUri.toString()
                 );
             }
+
 
         } catch (
                 Exception ignored
         ) {
+
             // Invalid intent URL.
         }
     }
 
 
     /* =====================================================
-       RESOURCE SECURITY
-
-       Block clear-text HTTP subresources inside WebView.
-    ===================================================== */
-
-    @Override
-    public WebResourceResponse shouldInterceptRequest(
-            WebView view,
-            WebResourceRequest request
-    ) {
-        if (
-                request != null &&
-                request.getUrl() != null
-        ) {
-            Uri uri =
-                    request.getUrl();
-
-            String scheme =
-                    safeLower(
-                            uri.getScheme()
-                    );
-
-            if (
-                    "http".equals(
-                            scheme
-                    )
-            ) {
-                return new WebResourceResponse(
-                        "text/plain",
-                        "UTF-8",
-                        null
-                );
-            }
-        }
-
-        return super.shouldInterceptRequest(
-                view,
-                request
-        );
-    }
-
-
-    /* =====================================================
-       SAFE LOWERCASE
+       SAFE STRING
     ===================================================== */
 
     private String safeLower(
             String value
     ) {
+
         if (
                 value == null
         ) {
+
             return "";
         }
+
 
         return value
                 .trim()
