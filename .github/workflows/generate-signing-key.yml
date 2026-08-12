@@ -1,0 +1,193 @@
+name: Generate 11Play Signing Key - RUN ONCE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-signing-key:
+    name: Generate Permanent Signing Key
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+
+      # =====================================================
+      # JAVA / KEYTOOL
+      # =====================================================
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+
+      # =====================================================
+      # CHECK PASSWORD SECRET
+      # =====================================================
+
+      - name: Validate signing password
+        shell: bash
+        env:
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$SIGNING_KEY_PASSWORD" ]; then
+            echo "ERROR: SIGNING_KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ "${#SIGNING_KEY_PASSWORD}" -lt 6 ]; then
+            echo "ERROR: Signing password must contain at least 6 characters."
+            exit 1
+          fi
+
+          echo "Signing password secret found."
+
+
+      # =====================================================
+      # GENERATE PERMANENT 11PLAY KEYSTORE
+      #
+      # IMPORTANT:
+      # Run this workflow only once.
+      #
+      # Alias:
+      #   11play
+      #
+      # File:
+      #   11play-release.jks
+      # =====================================================
+
+      - name: Generate 11Play release keystore
+        shell: bash
+        env:
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          keytool \
+            -genkeypair \
+            -v \
+            -keystore 11play-release.jks \
+            -storetype JKS \
+            -storepass "$SIGNING_KEY_PASSWORD" \
+            -keypass "$SIGNING_KEY_PASSWORD" \
+            -alias 11play \
+            -keyalg RSA \
+            -keysize 4096 \
+            -validity 10000 \
+            -dname "CN=11Play, OU=Android, O=11Play"
+
+          if [ ! -s "11play-release.jks" ]; then
+            echo "ERROR: Keystore was not generated."
+            exit 1
+          fi
+
+          echo "11Play signing keystore generated successfully."
+
+
+      # =====================================================
+      # GET SHA-1 AND SHA-256
+      # =====================================================
+
+      - name: Generate certificate fingerprints
+        shell: bash
+        env:
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          keytool \
+            -list \
+            -v \
+            -keystore 11play-release.jks \
+            -storepass "$SIGNING_KEY_PASSWORD" \
+            -alias 11play \
+            > certificate-info.txt
+
+          SHA1=$(grep "SHA1:" certificate-info.txt | sed 's/^[[:space:]]*//')
+          SHA256=$(grep "SHA256:" certificate-info.txt | sed 's/^[[:space:]]*//')
+
+          if [ -z "$SHA1" ]; then
+            echo "ERROR: SHA-1 fingerprint could not be generated."
+            exit 1
+          fi
+
+          if [ -z "$SHA256" ]; then
+            echo "ERROR: SHA-256 fingerprint could not be generated."
+            exit 1
+          fi
+
+          echo "========================================"
+          echo "11PLAY SIGNING CERTIFICATE"
+          echo "========================================"
+          echo "$SHA1"
+          echo "$SHA256"
+          echo "========================================"
+
+          {
+            echo "## 11Play Android Signing Certificate"
+            echo ""
+            echo '```text'
+            echo "$SHA1"
+            echo "$SHA256"
+            echo '```'
+            echo ""
+            echo "Alias: 11play"
+            echo ""
+            echo "Keep the downloaded keystore permanently."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      # =====================================================
+      # CREATE SAFE FINGERPRINT FILE
+      # =====================================================
+
+      - name: Create fingerprint file
+        shell: bash
+        env:
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          {
+            echo "11Play Android Signing Certificate"
+            echo "=================================="
+            echo ""
+            keytool \
+              -list \
+              -v \
+              -keystore 11play-release.jks \
+              -storepass "$SIGNING_KEY_PASSWORD" \
+              -alias 11play \
+              | grep -E "Alias name:|SHA1:|SHA256:"
+          } > 11play-fingerprints.txt
+
+
+      # =====================================================
+      # PACKAGE KEYSTORE
+      # =====================================================
+
+      - name: Prepare signing artifact
+        shell: bash
+        run: |
+          mkdir -p signing-output
+
+          cp \
+            11play-release.jks \
+            signing-output/11play-release.jks
+
+          cp \
+            11play-fingerprints.txt \
+            signing-output/11play-fingerprints.txt
+
+
+      # =====================================================
+      # UPLOAD KEYSTORE
+      #
+      # Download this artifact immediately and keep
+      # multiple private backups.
+      # =====================================================
+
+      - name: Upload signing key
+        uses: actions/upload-artifact@v4
+        with:
+          name: 11Play-Permanent-Signing-Key
+          path: signing-output/
+          if-no-files-found: error
+          retention-days: 1
