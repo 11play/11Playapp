@@ -8,15 +8,26 @@
     android:background="@color/elevenplay_background">
 
     <!-- =====================================================
-         11PLAY MAIN WEBVIEW
+         PULL TO REFRESH CONTAINER
     ====================================================== -->
 
-    <WebView
-        android:id="@+id/webView"
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefreshLayout"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@color/elevenplay_background"
-        android:overScrollMode="never" />
+        android:layout_height="match_parent">
+
+        <!-- =====================================================
+             11PLAY MAIN WEBVIEW
+        ====================================================== -->
+
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/elevenplay_background"
+            android:overScrollMode="never" />
+
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <!-- =====================================================
          PAGE LOADING PROGRESS
