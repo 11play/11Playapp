@@ -11,8 +11,9 @@ import android.os.Environment;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 
-import com.elevenplay.app.R;
 import com.elevenplay.app.config.AppConfig;
+
+import java.util.Locale;
 
 /* =========================================================
    11PLAY — DOWNLOAD CONTROLLER
@@ -22,8 +23,10 @@ import com.elevenplay.app.config.AppConfig;
    - Support HTTP and HTTPS downloads
    - Preserve WebView cookies
    - Preserve browser user-agent
-   - Save files to:
-       Downloads/11Play/
+   - Save files directly to:
+       Downloads/
+   - Correctly detect APK downloads
+   - Force Android APK MIME type when required
    - Support Android 7+
    - Handle legacy storage permission safely
    - Never automatically execute/open downloaded files
@@ -32,9 +35,19 @@ import com.elevenplay.app.config.AppConfig;
    - DownloadManager accepts HTTP/HTTPS URLs.
    - Android 10+ does not require legacy storage permission
      for public Downloads.
+   - APK files use:
+       application/vnd.android.package-archive
 ========================================================= */
 
 public final class DownloadController {
+
+    /* =====================================================
+       APK MIME TYPE
+    ===================================================== */
+
+    private static final String APK_MIME_TYPE =
+            "application/vnd.android.package-archive";
+
 
     /* =====================================================
        RESULT
@@ -73,7 +86,12 @@ public final class DownloadController {
     public DownloadController(
             Activity activity
     ) {
-        if (activity == null) {
+
+        if (
+                activity ==
+                        null
+        ) {
+
             throw new IllegalArgumentException(
                     "Activity is required."
             );
@@ -94,6 +112,7 @@ public final class DownloadController {
             String contentDisposition,
             String mimeType
     ) {
+
         PendingDownload download =
                 new PendingDownload(
                         url,
@@ -117,14 +136,18 @@ public final class DownloadController {
             PendingDownload download,
             boolean allowPending
     ) {
+
         if (
-                download == null ||
+                download ==
+                        null ||
                 !isValidHttpUrl(
                         download.url
                 )
         ) {
+
             return DownloadResult.INVALID_URL;
         }
+
 
         /*
          * Android 9 and below require legacy
@@ -136,7 +159,11 @@ public final class DownloadController {
                 requiresLegacyStoragePermission() &&
                 !hasLegacyStoragePermission()
         ) {
-            if (allowPending) {
+
+            if (
+                    allowPending
+            ) {
+
                 pendingDownload =
                         download;
             }
@@ -144,16 +171,18 @@ public final class DownloadController {
             return DownloadResult.PERMISSION_REQUIRED;
         }
 
+
         try {
+
             Uri uri =
                     Uri.parse(
                             download.url
                     );
 
-            DownloadManager.Request request =
-                    new DownloadManager.Request(
-                            uri
-                    );
+
+            /* =============================================
+               RESOLVE FILE NAME
+            ============================================== */
 
             String fileName =
                     resolveFileName(
@@ -162,10 +191,57 @@ public final class DownloadController {
                             download.mimeType
                     );
 
-            String safeMimeType =
-                    normalizeMimeType(
-                            download.mimeType
+
+            /* =============================================
+               APK DETECTION
+            ============================================== */
+
+            boolean apkDownload =
+                    isApkDownload(
+                            download.url,
+                            download.contentDisposition,
+                            download.mimeType,
+                            fileName
                     );
+
+
+            /*
+             * If the server gives a generic filename but
+             * the download is clearly an APK, ensure the
+             * final saved file ends with .apk.
+             */
+
+            if (
+                    apkDownload
+            ) {
+
+                fileName =
+                        ensureApkExtension(
+                                fileName
+                        );
+            }
+
+
+            /* =============================================
+               FINAL MIME TYPE
+            ============================================== */
+
+            String safeMimeType =
+                    resolveDownloadMimeType(
+                            download.mimeType,
+                            apkDownload
+                    );
+
+
+            /* =============================================
+               DOWNLOAD REQUEST
+            ============================================== */
+
+            DownloadManager.Request request =
+                    new DownloadManager.Request(
+                            uri
+                    );
+
 
             /* =============================================
                REQUEST METADATA
@@ -196,11 +272,14 @@ public final class DownloadController {
 
             /* =============================================
                MIME TYPE
+
+               APK files must use Android's package MIME.
             ============================================== */
 
             if (
                     !safeMimeType.isEmpty()
             ) {
+
                 request.setMimeType(
                         safeMimeType
                 );
@@ -219,6 +298,7 @@ public final class DownloadController {
             if (
                     !safeUserAgent.isEmpty()
             ) {
+
                 request.addRequestHeader(
                         "User-Agent",
                         safeUserAgent
@@ -241,9 +321,11 @@ public final class DownloadController {
                             );
 
             if (
-                    cookies != null &&
+                    cookies !=
+                            null &&
                     !cookies.trim().isEmpty()
             ) {
+
                 request.addRequestHeader(
                         "Cookie",
                         cookies
@@ -254,22 +336,17 @@ public final class DownloadController {
             /* =============================================
                DESTINATION
 
-               Device storage:
+               FINAL LOCATION:
 
                Downloads/
-                   11Play/
-                       filename.ext
-            ============================================== */
+                   filename.apk
 
-            String relativePath =
-                    AppConfig
-                            .DOWNLOAD_DIRECTORY_NAME
-                            + "/"
-                            + fileName;
+               No extra 11Play subfolder.
+            ============================================== */
 
             request.setDestinationInExternalPublicDir(
                     Environment.DIRECTORY_DOWNLOADS,
-                    relativePath
+                    fileName
             );
 
 
@@ -281,6 +358,7 @@ public final class DownloadController {
                     Build.VERSION.SDK_INT <
                             Build.VERSION_CODES.Q
             ) {
+
                 request.allowScanningByMediaScanner();
             }
 
@@ -295,22 +373,30 @@ public final class DownloadController {
                                     Context.DOWNLOAD_SERVICE
                             );
 
+
             if (
-                    downloadManager == null
+                    downloadManager ==
+                            null
             ) {
+
                 return DownloadResult.FAILED;
             }
+
 
             downloadManager.enqueue(
                     request
             );
 
+
             pendingDownload =
                     null;
 
+
             return DownloadResult.STARTED;
 
-        } catch (Exception error) {
+        } catch (
+                Exception error
+        ) {
 
             pendingDownload =
                     null;
@@ -321,20 +407,215 @@ public final class DownloadController {
 
 
     /* =====================================================
+       APK DETECTION
+
+       APK is detected from any reliable signal:
+
+       - MIME type
+       - resolved filename
+       - Content-Disposition
+       - download URL
+    ===================================================== */
+
+    private boolean isApkDownload(
+            String url,
+            String contentDisposition,
+            String mimeType,
+            String fileName
+    ) {
+
+        String safeMime =
+                safeLower(
+                        mimeType
+                );
+
+        String safeFileName =
+                safeLower(
+                        fileName
+                );
+
+        String safeDisposition =
+                safeLower(
+                        contentDisposition
+                );
+
+        String safeUrl =
+                safeLower(
+                        url
+                );
+
+
+        /* =============================================
+           MIME SIGNAL
+        ============================================== */
+
+        if (
+                safeMime.startsWith(
+                        APK_MIME_TYPE
+                ) ||
+                safeMime.startsWith(
+                        "application/x-android-package"
+                )
+        ) {
+
+            return true;
+        }
+
+
+        /* =============================================
+           FILE NAME SIGNAL
+        ============================================== */
+
+        if (
+                safeFileName.endsWith(
+                        ".apk"
+                )
+        ) {
+
+            return true;
+        }
+
+
+        /* =============================================
+           CONTENT-DISPOSITION SIGNAL
+        ============================================== */
+
+        if (
+                safeDisposition.contains(
+                        ".apk"
+                )
+        ) {
+
+            return true;
+        }
+
+
+        /* =============================================
+           URL SIGNAL
+
+           Covers:
+           /app.apk
+           /app.apk?version=123
+           ?file=app.apk
+        ============================================== */
+
+        return safeUrl.contains(
+                ".apk"
+        );
+    }
+
+
+    /* =====================================================
+       ENSURE APK EXTENSION
+    ===================================================== */
+
+    private String ensureApkExtension(
+            String fileName
+    ) {
+
+        String safeFileName =
+                sanitizeFileName(
+                        fileName
+                );
+
+
+        if (
+                safeFileName.isEmpty()
+        ) {
+
+            return "11play-download-"
+                    + System.currentTimeMillis()
+                    + ".apk";
+        }
+
+
+        if (
+                safeFileName
+                        .toLowerCase(
+                                Locale.ROOT
+                        )
+                        .endsWith(
+                                ".apk"
+                        )
+        ) {
+
+            return safeFileName;
+        }
+
+
+        /*
+         * Keep final filename within a safe length after
+         * appending the APK extension.
+         */
+
+        if (
+                safeFileName.length() >
+                        176
+        ) {
+
+            safeFileName =
+                    safeFileName.substring(
+                            0,
+                            176
+                    );
+        }
+
+
+        return safeFileName
+                + ".apk";
+    }
+
+
+    /* =====================================================
+       DOWNLOAD MIME TYPE
+    ===================================================== */
+
+    private String resolveDownloadMimeType(
+            String originalMimeType,
+            boolean apkDownload
+    ) {
+
+        /*
+         * APK always receives the correct Android MIME,
+         * even if the web server reports:
+         *
+         * application/octet-stream
+         */
+
+        if (
+                apkDownload
+        ) {
+
+            return APK_MIME_TYPE;
+        }
+
+
+        return normalizeMimeType(
+                originalMimeType
+        );
+    }
+
+
+    /* =====================================================
        LEGACY STORAGE PERMISSION
     ===================================================== */
 
     public boolean requiresLegacyStoragePermission() {
+
         return Build.VERSION.SDK_INT <=
                 Build.VERSION_CODES.P;
     }
 
+
     public boolean hasLegacyStoragePermission() {
+
         if (
                 !requiresLegacyStoragePermission()
         ) {
+
             return true;
         }
+
 
         return activity.checkSelfPermission(
                 Manifest.permission
@@ -347,22 +628,27 @@ public final class DownloadController {
     /* =====================================================
        RETRY PENDING DOWNLOAD
 
-       MainActivity will call this after legacy
+       MainActivity calls this after legacy
        storage permission is approved.
     ===================================================== */
 
     public DownloadResult retryPendingDownload() {
+
         if (
-                pendingDownload == null
+                pendingDownload ==
+                        null
         ) {
+
             return DownloadResult.FAILED;
         }
+
 
         PendingDownload download =
                 pendingDownload;
 
         pendingDownload =
                 null;
+
 
         return startDownloadInternal(
                 download,
@@ -372,12 +658,14 @@ public final class DownloadController {
 
 
     public boolean hasPendingDownload() {
+
         return pendingDownload !=
                 null;
     }
 
 
     public void clearPendingDownload() {
+
         pendingDownload =
                 null;
     }
@@ -390,25 +678,33 @@ public final class DownloadController {
     private boolean isValidHttpUrl(
             String value
     ) {
+
         String url =
                 safeString(
                         value
                 );
 
-        if (url.isEmpty()) {
+
+        if (
+                url.isEmpty()
+        ) {
+
             return false;
         }
 
+
         try {
+
             Uri uri =
                     Uri.parse(
                             url
                     );
 
             String scheme =
-                    safeString(
+                    safeLower(
                             uri.getScheme()
-                    ).toLowerCase();
+                    );
+
 
             return scheme.equals(
                     "https"
@@ -417,7 +713,10 @@ public final class DownloadController {
                             "http"
                     );
 
-        } catch (Exception error) {
+        } catch (
+                Exception error
+        ) {
+
             return false;
         }
     }
@@ -432,52 +731,73 @@ public final class DownloadController {
             String contentDisposition,
             String mimeType
     ) {
+
         String fileName;
 
+
         try {
+
             fileName =
                     URLUtil.guessFileName(
                             url,
                             contentDisposition,
                             mimeType
                     );
-        } catch (Exception error) {
+
+        } catch (
+                Exception error
+        ) {
+
             fileName =
                     "";
         }
+
 
         fileName =
                 sanitizeFileName(
                         fileName
                 );
 
+
         if (
                 fileName.isEmpty()
         ) {
+
             fileName =
                     "11play-download-"
                             + System.currentTimeMillis();
         }
 
+
         return fileName;
     }
 
 
+    /* =====================================================
+       SANITIZE FILE NAME
+    ===================================================== */
+
     private String sanitizeFileName(
             String value
     ) {
+
         String fileName =
                 safeString(
                         value
                 );
 
-        if (fileName.isEmpty()) {
+
+        if (
+                fileName.isEmpty()
+        ) {
+
             return "";
         }
 
+
         /*
          * Remove directory traversal and characters that
-         * should never appear inside our download filename.
+         * should never appear inside a download filename.
          */
 
         fileName =
@@ -534,11 +854,13 @@ public final class DownloadController {
                         "_"
                 );
 
+
         while (
                 fileName.contains(
                         ".."
                 )
         ) {
+
             fileName =
                     fileName.replace(
                             "..",
@@ -546,16 +868,19 @@ public final class DownloadController {
                     );
         }
 
+
         if (
                 fileName.length() >
                         180
         ) {
+
             fileName =
                     fileName.substring(
                             0,
                             180
                     );
         }
+
 
         return fileName.trim();
     }
@@ -568,23 +893,48 @@ public final class DownloadController {
     private String normalizeMimeType(
             String value
     ) {
+
         String mimeType =
                 safeString(
                         value
                 );
 
+
         if (
-                mimeType.isEmpty() ||
-                mimeType.equalsIgnoreCase(
-                        "application/octet-stream"
-                )
+                mimeType.isEmpty()
         ) {
-            return mimeType;
+
+            return "";
         }
 
+
         /*
-         * Prevent malformed MIME values from becoming
-         * request headers.
+         * Remove MIME parameters such as:
+         *
+         * application/pdf; charset=utf-8
+         */
+
+        int separator =
+                mimeType.indexOf(
+                        ';'
+                );
+
+
+        if (
+                separator >=
+                        0
+        ) {
+
+            mimeType =
+                    mimeType.substring(
+                            0,
+                            separator
+                    ).trim();
+        }
+
+
+        /*
+         * Prevent malformed MIME values.
          */
 
         if (
@@ -598,10 +948,28 @@ public final class DownloadController {
                         "\r"
                 )
         ) {
+
             return "";
         }
 
+
         return mimeType;
+    }
+
+
+    /* =====================================================
+       SAFE LOWERCASE STRING
+    ===================================================== */
+
+    private String safeLower(
+            Object value
+    ) {
+
+        return safeString(
+                value
+        ).toLowerCase(
+                Locale.ROOT
+        );
     }
 
 
@@ -612,9 +980,15 @@ public final class DownloadController {
     private String safeString(
             Object value
     ) {
-        if (value == null) {
+
+        if (
+                value ==
+                        null
+        ) {
+
             return "";
         }
+
 
         return String.valueOf(
                 value
@@ -643,6 +1017,7 @@ public final class DownloadController {
                 String contentDisposition,
                 String mimeType
         ) {
+
             this.url =
                     url;
 
