@@ -11,7 +11,6 @@ import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
-import android.webkit.WebHistoryItem;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
@@ -58,7 +57,7 @@ import java.util.Set;
    - Inject native-auth-bridge.js at document start
    - Preserve WebView navigation state
    - Support pull-to-refresh
-   - Handle smart Android back navigation
+   - Handle browser-friendly Android back navigation
 
    Official website:
        https://11play.github.io/11play/
@@ -359,9 +358,6 @@ public final class MainActivity
 
     /* =====================================================
        STOP PULL REFRESH INDICATOR
-
-       This method can also be called by WebView loading
-       callbacks if required.
     ===================================================== */
 
     public void stopSwipeRefresh() {
@@ -1365,23 +1361,13 @@ public final class MainActivity
 
 
     /* =====================================================
-       SMART BACK BUTTON
+       BACK BUTTON — BROWSER FRIENDLY
 
-       Behavior:
-
-       OFFICIAL 11PLAY PAGE:
-       - Normal WebView Back behavior.
-
-       THIRD-PARTY WEBSITE:
-       - Skip all third-party browsing history.
-       - Jump directly back to the most recent
-         official 11Play history entry.
-
-       Example:
+       Expected behavior:
 
        11Play
          ↓
-       Casino home
+       Third-party Site Home
          ↓
        Page 1
          ↓
@@ -1389,11 +1375,20 @@ public final class MainActivity
          ↓
        Page 3
 
-       Back:
-       Page 3 → 11Play
+       Back sequence:
 
-       NOT:
-       Page 3 → Page 2 → Page 1 → Casino → 11Play
+       Page 3
+         → Page 2
+         → Page 1
+         → Third-party Site Home
+         → 11Play
+
+       Therefore:
+       - Internal third-party history is preserved.
+       - No third-party pages are skipped.
+       - At the third-party home page, the next Back
+         naturally returns to the previous 11Play entry.
+       - 11Play's own WebView history also remains normal.
     ===================================================== */
 
     @SuppressWarnings("deprecation")
@@ -1401,60 +1396,8 @@ public final class MainActivity
     public void onBackPressed() {
 
         if (
-                webView ==
-                        null
-        ) {
-
-            super.onBackPressed();
-
-            return;
-        }
-
-
-        String currentUrl =
-                webView.getUrl();
-
-
-        /* =============================================
-           CURRENT PAGE IS THIRD-PARTY
-        ============================================== */
-
-        if (
-                !isOfficial11PlayUrl(
-                        currentUrl
-                )
-        ) {
-
-            if (
-                    jumpBackToPrevious11PlayPage()
-            ) {
-                return;
-            }
-
-
-            /*
-             * Safety fallback:
-             *
-             * If no 11Play entry exists in WebView history,
-             * return to the official app home instead of
-             * forcing the user through third-party history.
-             */
-
-            webView.loadUrl(
-                    AppConfig.START_URL
-            );
-
-            return;
-        }
-
-
-        /* =============================================
-           CURRENT PAGE IS 11PLAY
-
-           Keep normal back behavior.
-        ============================================== */
-
-        if (
+                webView !=
+                        null &&
                 webView.canGoBack()
         ) {
 
@@ -1465,267 +1408,6 @@ public final class MainActivity
 
 
         super.onBackPressed();
-    }
-
-
-    /* =====================================================
-       JUMP BACK TO PREVIOUS 11PLAY HISTORY ENTRY
-    ===================================================== */
-
-    private boolean jumpBackToPrevious11PlayPage() {
-
-        if (
-                webView ==
-                        null
-        ) {
-            return false;
-        }
-
-
-        try {
-
-            WebBackForwardList history =
-                    webView.copyBackForwardList();
-
-
-            if (
-                    history ==
-                            null
-            ) {
-                return false;
-            }
-
-
-            int currentIndex =
-                    history.getCurrentIndex();
-
-
-            if (
-                    currentIndex <=
-                            0
-            ) {
-                return false;
-            }
-
-
-            /*
-             * Walk backwards through the WebView history
-             * until the most recent official 11Play URL
-             * is found.
-             */
-
-            for (
-                    int index =
-                            currentIndex - 1;
-                    index >= 0;
-                    index--
-            ) {
-
-                WebHistoryItem historyItem =
-                        history.getItemAtIndex(
-                                index
-                        );
-
-
-                if (
-                        historyItem ==
-                                null
-                ) {
-                    continue;
-                }
-
-
-                String historyUrl =
-                        historyItem.getUrl();
-
-
-                if (
-                        !isOfficial11PlayUrl(
-                                historyUrl
-                        )
-                ) {
-                    continue;
-                }
-
-
-                int offset =
-                        index -
-                        currentIndex;
-
-
-                if (
-                        offset <
-                                0
-                ) {
-
-                    webView.goBackOrForward(
-                            offset
-                    );
-
-                    return true;
-                }
-            }
-
-        } catch (
-                Exception ignored
-        ) {
-            // Fall through to START_URL fallback.
-        }
-
-
-        return false;
-    }
-
-
-    /* =====================================================
-       OFFICIAL 11PLAY URL CHECK
-
-       Official URLs include:
-
-       https://11play.github.io/11play/
-       https://11play.github.io/11play/pages/...
-       https://11play.github.io/11play/...
-
-       Third-party domains are NOT considered official.
-    ===================================================== */
-
-    private boolean isOfficial11PlayUrl(
-            String url
-    ) {
-
-        if (
-                url ==
-                        null ||
-                url.trim().isEmpty()
-        ) {
-            return false;
-        }
-
-
-        try {
-
-            Uri currentUri =
-                    Uri.parse(
-                            url
-                    );
-
-            Uri officialUri =
-                    Uri.parse(
-                            AppConfig.START_URL
-                    );
-
-
-            String currentScheme =
-                    safeLower(
-                            currentUri.getScheme()
-                    );
-
-            String officialScheme =
-                    safeLower(
-                            officialUri.getScheme()
-                    );
-
-
-            if (
-                    !currentScheme.equals(
-                            officialScheme
-                    )
-            ) {
-                return false;
-            }
-
-
-            String currentHost =
-                    safeLower(
-                            currentUri.getHost()
-                    );
-
-            String officialHost =
-                    safeLower(
-                            officialUri.getHost()
-                    );
-
-
-            if (
-                    !currentHost.equals(
-                            officialHost
-                    )
-            ) {
-                return false;
-            }
-
-
-            String currentPath =
-                    currentUri.getPath();
-
-            String officialPath =
-                    officialUri.getPath();
-
-
-            if (
-                    currentPath ==
-                            null
-            ) {
-                currentPath =
-                        "/";
-            }
-
-
-            if (
-                    officialPath ==
-                            null ||
-                    officialPath.trim().isEmpty()
-            ) {
-                officialPath =
-                        "/";
-            }
-
-
-            /*
-             * START_URL currently uses:
-             *
-             * /11play/
-             *
-             * Therefore any URL inside /11play/ is an
-             * official 11Play WebView page.
-             */
-
-            if (
-                    !officialPath.endsWith(
-                            "/"
-                    )
-            ) {
-
-                officialPath =
-                        officialPath +
-                        "/";
-            }
-
-
-            String officialPathWithoutSlash =
-                    officialPath.length() > 1
-                            ?
-                            officialPath.substring(
-                                    0,
-                                    officialPath.length() - 1
-                            )
-                            :
-                            officialPath;
-
-
-            return currentPath.equals(
-                    officialPathWithoutSlash
-            ) ||
-                    currentPath.startsWith(
-                            officialPath
-                    );
-
-        } catch (
-                Exception ignored
-        ) {
-
-            return false;
-        }
     }
 
 
