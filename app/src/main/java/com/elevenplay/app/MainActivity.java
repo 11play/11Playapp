@@ -11,6 +11,7 @@ import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
+import android.webkit.WebHistoryItem;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
@@ -20,6 +21,7 @@ import android.widget.Toast;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
 
@@ -55,7 +57,8 @@ import java.util.Set;
    - Attach secure native authentication bridge
    - Inject native-auth-bridge.js at document start
    - Preserve WebView navigation state
-   - Handle Android back navigation
+   - Support pull-to-refresh
+   - Handle smart Android back navigation
 
    Official website:
        https://11play.github.io/11play/
@@ -94,6 +97,9 @@ public final class MainActivity
     ===================================================== */
 
     private FrameLayout rootContainer;
+
+    private SwipeRefreshLayout
+            swipeRefreshLayout;
 
     private WebView webView;
 
@@ -149,6 +155,11 @@ public final class MainActivity
                         R.id.rootContainer
                 );
 
+        swipeRefreshLayout =
+                findViewById(
+                        R.id.swipeRefreshLayout
+                );
+
         webView =
                 findViewById(
                         R.id.webView
@@ -162,22 +173,16 @@ public final class MainActivity
 
         /* =============================================
            SYSTEM SAFE AREA
-
-           CRITICAL FOR ANDROID 15 / 16
-
-           Prevents website header and bottom navigation
-           from being placed underneath:
-
-           - Android status bar
-           - Android navigation bar
-           - Display cutout / notch
-
-           This means website buttons remain fully
-           clickable and cannot conflict with Android's
-           Back / Home / Recent buttons.
         ============================================== */
 
         configureSystemInsets();
+
+
+        /* =============================================
+           PULL TO REFRESH
+        ============================================== */
+
+        configureSwipeRefresh();
 
 
         /* =============================================
@@ -214,8 +219,6 @@ public final class MainActivity
 
         /* =============================================
            NATIVE AUTH BRIDGE
-
-           Must be attached BEFORE page load.
         ============================================== */
 
         nativeAuthBridge.attach();
@@ -223,8 +226,6 @@ public final class MainActivity
 
         /* =============================================
            NATIVE AUTH JAVASCRIPT
-
-           Must be registered BEFORE loadUrl/restoreState.
         ============================================== */
 
         installNativeAuthJavaScript();
@@ -242,29 +243,6 @@ public final class MainActivity
 
     /* =====================================================
        SYSTEM WINDOW INSETS
-
-       Android 15+ enforces edge-to-edge for applications
-       targeting modern SDK versions.
-
-       Android 16 / targetSdk 36 cannot rely on opting out
-       of edge-to-edge.
-
-       Therefore we explicitly reserve the safe area around
-       the WebView.
-
-       Result:
-
-       ┌──────────────────────────┐
-       │ Android Status Bar       │
-       ├──────────────────────────┤
-       │ 11Play Website Header    │
-       │                          │
-       │ Website Content          │
-       │                          │
-       │ 11Play Bottom Navigation │
-       ├──────────────────────────┤
-       │ Android Navigation Bar   │
-       └──────────────────────────┘
     ===================================================== */
 
     private void configureSystemInsets() {
@@ -284,10 +262,6 @@ public final class MainActivity
                         windowInsets
                 ) -> {
 
-                    /* =================================
-                       STATUS + NAVIGATION + CUTOUT
-                    ================================== */
-
                     Insets safeInsets =
                             windowInsets.getInsets(
                                     WindowInsetsCompat.Type.systemBars()
@@ -295,13 +269,6 @@ public final class MainActivity
                                     WindowInsetsCompat.Type.displayCutout()
                             );
 
-
-                    /* =================================
-                       APPLY SAFE PADDING
-
-                       WebView viewport is now physically
-                       separated from Android system UI.
-                    ================================== */
 
                     view.setPadding(
                             safeInsets.left,
@@ -311,26 +278,106 @@ public final class MainActivity
                     );
 
 
-                    /*
-                     * Do not consume the insets.
-                     *
-                     * Returning the original WindowInsets
-                     * keeps normal Android inset dispatch
-                     * behavior intact.
-                     */
-
                     return windowInsets;
                 }
         );
 
 
-        /*
-         * Request an inset pass immediately.
-         */
-
         ViewCompat.requestApplyInsets(
                 rootContainer
         );
+    }
+
+
+    /* =====================================================
+       PULL TO REFRESH
+
+       Refresh is enabled only when WebView is already
+       at the top of the current page.
+
+       This prevents normal page scrolling from being
+       interpreted as a refresh gesture.
+    ===================================================== */
+
+    private void configureSwipeRefresh() {
+
+        if (
+                swipeRefreshLayout ==
+                        null ||
+                webView ==
+                        null
+        ) {
+            return;
+        }
+
+
+        /* =============================================
+           ONLY ALLOW REFRESH AT TOP
+        ============================================== */
+
+        swipeRefreshLayout
+                .setOnChildScrollUpCallback(
+                        (
+                                parent,
+                                child
+                        ) -> {
+
+                            return webView != null &&
+                                    webView.canScrollVertically(
+                                            -1
+                                    );
+                        }
+                );
+
+
+        /* =============================================
+           REFRESH CURRENT WEB PAGE
+        ============================================== */
+
+        swipeRefreshLayout
+                .setOnRefreshListener(
+                        () -> {
+
+                            if (
+                                    webView !=
+                                            null
+                            ) {
+
+                                webView.reload();
+
+                            } else {
+
+                                swipeRefreshLayout
+                                        .setRefreshing(
+                                                false
+                                        );
+                            }
+                        }
+                );
+    }
+
+
+    /* =====================================================
+       STOP PULL REFRESH INDICATOR
+
+       This method can also be called by WebView loading
+       callbacks if required.
+    ===================================================== */
+
+    public void stopSwipeRefresh() {
+
+        if (
+                swipeRefreshLayout !=
+                        null &&
+                swipeRefreshLayout
+                        .isRefreshing()
+        ) {
+
+            swipeRefreshLayout
+                    .setRefreshing(
+                            false
+                    );
+        }
     }
 
 
@@ -1318,7 +1365,35 @@ public final class MainActivity
 
 
     /* =====================================================
-       BACK BUTTON
+       SMART BACK BUTTON
+
+       Behavior:
+
+       OFFICIAL 11PLAY PAGE:
+       - Normal WebView Back behavior.
+
+       THIRD-PARTY WEBSITE:
+       - Skip all third-party browsing history.
+       - Jump directly back to the most recent
+         official 11Play history entry.
+
+       Example:
+
+       11Play
+         ↓
+       Casino home
+         ↓
+       Page 1
+         ↓
+       Page 2
+         ↓
+       Page 3
+
+       Back:
+       Page 3 → 11Play
+
+       NOT:
+       Page 3 → Page 2 → Page 1 → Casino → 11Play
     ===================================================== */
 
     @SuppressWarnings("deprecation")
@@ -1326,8 +1401,60 @@ public final class MainActivity
     public void onBackPressed() {
 
         if (
-                webView !=
-                        null &&
+                webView ==
+                        null
+        ) {
+
+            super.onBackPressed();
+
+            return;
+        }
+
+
+        String currentUrl =
+                webView.getUrl();
+
+
+        /* =============================================
+           CURRENT PAGE IS THIRD-PARTY
+        ============================================== */
+
+        if (
+                !isOfficial11PlayUrl(
+                        currentUrl
+                )
+        ) {
+
+            if (
+                    jumpBackToPrevious11PlayPage()
+            ) {
+                return;
+            }
+
+
+            /*
+             * Safety fallback:
+             *
+             * If no 11Play entry exists in WebView history,
+             * return to the official app home instead of
+             * forcing the user through third-party history.
+             */
+
+            webView.loadUrl(
+                    AppConfig.START_URL
+            );
+
+            return;
+        }
+
+
+        /* =============================================
+           CURRENT PAGE IS 11PLAY
+
+           Keep normal back behavior.
+        ============================================== */
+
+        if (
                 webView.canGoBack()
         ) {
 
@@ -1338,6 +1465,267 @@ public final class MainActivity
 
 
         super.onBackPressed();
+    }
+
+
+    /* =====================================================
+       JUMP BACK TO PREVIOUS 11PLAY HISTORY ENTRY
+    ===================================================== */
+
+    private boolean jumpBackToPrevious11PlayPage() {
+
+        if (
+                webView ==
+                        null
+        ) {
+            return false;
+        }
+
+
+        try {
+
+            WebBackForwardList history =
+                    webView.copyBackForwardList();
+
+
+            if (
+                    history ==
+                            null
+            ) {
+                return false;
+            }
+
+
+            int currentIndex =
+                    history.getCurrentIndex();
+
+
+            if (
+                    currentIndex <=
+                            0
+            ) {
+                return false;
+            }
+
+
+            /*
+             * Walk backwards through the WebView history
+             * until the most recent official 11Play URL
+             * is found.
+             */
+
+            for (
+                    int index =
+                            currentIndex - 1;
+                    index >= 0;
+                    index--
+            ) {
+
+                WebHistoryItem historyItem =
+                        history.getItemAtIndex(
+                                index
+                        );
+
+
+                if (
+                        historyItem ==
+                                null
+                ) {
+                    continue;
+                }
+
+
+                String historyUrl =
+                        historyItem.getUrl();
+
+
+                if (
+                        !isOfficial11PlayUrl(
+                                historyUrl
+                        )
+                ) {
+                    continue;
+                }
+
+
+                int offset =
+                        index -
+                        currentIndex;
+
+
+                if (
+                        offset <
+                                0
+                ) {
+
+                    webView.goBackOrForward(
+                            offset
+                    );
+
+                    return true;
+                }
+            }
+
+        } catch (
+                Exception ignored
+        ) {
+            // Fall through to START_URL fallback.
+        }
+
+
+        return false;
+    }
+
+
+    /* =====================================================
+       OFFICIAL 11PLAY URL CHECK
+
+       Official URLs include:
+
+       https://11play.github.io/11play/
+       https://11play.github.io/11play/pages/...
+       https://11play.github.io/11play/...
+
+       Third-party domains are NOT considered official.
+    ===================================================== */
+
+    private boolean isOfficial11PlayUrl(
+            String url
+    ) {
+
+        if (
+                url ==
+                        null ||
+                url.trim().isEmpty()
+        ) {
+            return false;
+        }
+
+
+        try {
+
+            Uri currentUri =
+                    Uri.parse(
+                            url
+                    );
+
+            Uri officialUri =
+                    Uri.parse(
+                            AppConfig.START_URL
+                    );
+
+
+            String currentScheme =
+                    safeLower(
+                            currentUri.getScheme()
+                    );
+
+            String officialScheme =
+                    safeLower(
+                            officialUri.getScheme()
+                    );
+
+
+            if (
+                    !currentScheme.equals(
+                            officialScheme
+                    )
+            ) {
+                return false;
+            }
+
+
+            String currentHost =
+                    safeLower(
+                            currentUri.getHost()
+                    );
+
+            String officialHost =
+                    safeLower(
+                            officialUri.getHost()
+                    );
+
+
+            if (
+                    !currentHost.equals(
+                            officialHost
+                    )
+            ) {
+                return false;
+            }
+
+
+            String currentPath =
+                    currentUri.getPath();
+
+            String officialPath =
+                    officialUri.getPath();
+
+
+            if (
+                    currentPath ==
+                            null
+            ) {
+                currentPath =
+                        "/";
+            }
+
+
+            if (
+                    officialPath ==
+                            null ||
+                    officialPath.trim().isEmpty()
+            ) {
+                officialPath =
+                        "/";
+            }
+
+
+            /*
+             * START_URL currently uses:
+             *
+             * /11play/
+             *
+             * Therefore any URL inside /11play/ is an
+             * official 11Play WebView page.
+             */
+
+            if (
+                    !officialPath.endsWith(
+                            "/"
+                    )
+            ) {
+
+                officialPath =
+                        officialPath +
+                        "/";
+            }
+
+
+            String officialPathWithoutSlash =
+                    officialPath.length() > 1
+                            ?
+                            officialPath.substring(
+                                    0,
+                                    officialPath.length() - 1
+                            )
+                            :
+                            officialPath;
+
+
+            return currentPath.equals(
+                    officialPathWithoutSlash
+            ) ||
+                    currentPath.startsWith(
+                            officialPath
+                    );
+
+        } catch (
+                Exception ignored
+        ) {
+
+            return false;
+        }
     }
 
 
@@ -1389,6 +1777,21 @@ public final class MainActivity
     protected void onDestroy() {
 
         cancelActiveFileChooser();
+
+
+        if (
+                swipeRefreshLayout !=
+                        null
+        ) {
+
+            swipeRefreshLayout
+                    .setOnRefreshListener(
+                            null
+                    );
+
+            swipeRefreshLayout =
+                    null;
+        }
 
 
         if (
@@ -1455,6 +1858,9 @@ public final class MainActivity
 
 
         rootContainer =
+                null;
+
+        pageProgress =
                 null;
 
 
