@@ -30,6 +30,21 @@
 
 
     <!-- =====================================================
+         APK INSTALL REQUEST
+
+         Required for Android apps targeting API 26+
+         when requesting installation of downloaded APK files.
+
+         Android may still require the user to enable:
+         "Allow from this source"
+    ====================================================== -->
+
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+    />
+
+
+    <!-- =====================================================
          APPLICATION
     ====================================================== -->
 
