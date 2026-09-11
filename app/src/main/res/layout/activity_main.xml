@@ -8,26 +8,19 @@
     android:background="@color/elevenplay_background">
 
     <!-- =====================================================
-         PULL TO REFRESH CONTAINER
+         11PLAY MAIN WEBVIEW
+
+         Pull-to-refresh has been completely removed.
+         Normal WebView scrolling remains unchanged.
     ====================================================== -->
 
-    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-        android:id="@+id/swipeRefreshLayout"
+    <WebView
+        android:id="@+id/webView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:background="@color/elevenplay_background"
+        android:overScrollMode="never" />
 
-        <!-- =====================================================
-             11PLAY MAIN WEBVIEW
-        ====================================================== -->
-
-        <WebView
-            android:id="@+id/webView"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="@color/elevenplay_background"
-            android:overScrollMode="never" />
-
-    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
     <!-- =====================================================
          PAGE LOADING PROGRESS
@@ -45,5 +38,39 @@
         android:indeterminate="false"
         android:progressTint="@color/elevenplay_blue"
         android:progressBackgroundTint="@android:color/transparent" />
+
+
+    <!-- =====================================================
+         FLOATING MANUAL REFRESH BUTTON
+
+         Tap:
+             Reload current WebView page.
+
+         Drag:
+             Move horizontally left/right.
+
+         Release:
+             MainActivity snaps it to the nearest edge.
+
+         The button stays above the WebView and does not
+         move when the website itself is scrolled.
+    ====================================================== -->
+
+    <ImageButton
+        android:id="@+id/floatingRefreshButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/bg_floating_refresh"
+        android:src="@drawable/ic_refresh"
+        android:padding="12dp"
+        android:scaleType="centerInside"
+        android:contentDescription="Refresh"
+        android:clickable="true"
+        android:focusable="true"
+        android:elevation="8dp"
+        android:alpha="0.94" />
 
 </FrameLayout>
