@@ -9,7 +9,6 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.MotionEvent;
-import android.view.View;
 import android.view.ViewConfiguration;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
@@ -61,9 +60,9 @@ import java.util.Set;
    - Inject native-auth-bridge.js at document start
    - Preserve WebView navigation state
    - Support floating manual refresh button
-   - Allow refresh button to move left/right
-   - Snap refresh button to nearest screen edge
-   - Remember refresh button side
+   - Allow floating refresh button free movement
+   - Keep floating button inside safe screen area
+   - Remember floating button position
    - Handle browser-friendly Android back navigation
 
    Official website:
@@ -107,8 +106,12 @@ public final class MainActivity
             "elevenplay_ui_preferences";
 
     private static final String
-            PREF_REFRESH_BUTTON_RIGHT =
-            "refresh_button_right";
+            PREF_REFRESH_X_RATIO =
+            "refresh_button_x_ratio";
+
+    private static final String
+            PREF_REFRESH_Y_RATIO =
+            "refresh_button_y_ratio";
 
 
     /* =====================================================
@@ -118,10 +121,6 @@ public final class MainActivity
     private static final long
             REFRESH_ROTATION_DURATION_MS =
             350L;
-
-    private static final long
-            REFRESH_SNAP_DURATION_MS =
-            160L;
 
 
     /* =====================================================
@@ -150,7 +149,15 @@ public final class MainActivity
             0f;
 
     private float
+            refreshTouchDownRawY =
+            0f;
+
+    private float
             refreshButtonStartX =
+            0f;
+
+    private float
+            refreshButtonStartY =
             0f;
 
     private boolean
@@ -236,7 +243,7 @@ public final class MainActivity
 
 
         /* =============================================
-           FLOATING MANUAL REFRESH BUTTON
+           FLOATING REFRESH BUTTON
         ============================================== */
 
         configureFloatingRefreshButton();
@@ -300,6 +307,14 @@ public final class MainActivity
 
     /* =====================================================
        SYSTEM WINDOW INSETS
+
+       rootContainer receives safe padding for:
+       - Status bar
+       - Display cutout
+       - Navigation bar
+
+       Floating refresh button is additionally clamped
+       inside these safe boundaries.
     ===================================================== */
 
     private void configureSystemInsets() {
@@ -335,6 +350,17 @@ public final class MainActivity
                     );
 
 
+                    if (
+                            floatingRefreshButton !=
+                                    null
+                    ) {
+
+                        floatingRefreshButton.post(
+                                this::clampRefreshButtonInsideSafeArea
+                        );
+                    }
+
+
                     return windowInsets;
                 }
         );
@@ -349,22 +375,29 @@ public final class MainActivity
     /* =====================================================
        FLOATING MANUAL REFRESH BUTTON
 
-       Behavior:
-
-       Single tap:
+       TAP:
            Reload current WebView page.
 
-       Press + horizontal movement:
-           Drag button left/right.
+       DRAG:
+           Move freely:
+           - Left
+           - Right
+           - Up
+           - Down
+           - Diagonally
 
-       Release after drag:
-           Snap button to nearest edge.
+       RELEASE:
+           Stay exactly where user releases it.
 
-       Dragging:
-           Never refreshes the WebView.
+       LIMITS:
+           Cannot move:
+           - Into status/top bar
+           - Into display cutout
+           - Into navigation bar
+           - Outside left/right screen boundary
 
-       Position:
-           Last selected side is remembered.
+       POSITION:
+           Saved automatically.
     ===================================================== */
 
     private void configureFloatingRefreshButton() {
@@ -397,7 +430,7 @@ public final class MainActivity
 
 
         /* =============================================
-           TOUCH = DRAG
+           FREE 2D DRAG
         ============================================== */
 
         floatingRefreshButton
@@ -420,7 +453,7 @@ public final class MainActivity
                             ) {
 
                                 /* =====================
-                                   START TOUCH
+                                   TOUCH START
                                 ====================== */
 
                                 case MotionEvent.ACTION_DOWN:
@@ -428,8 +461,14 @@ public final class MainActivity
                                     refreshTouchDownRawX =
                                             event.getRawX();
 
+                                    refreshTouchDownRawY =
+                                            event.getRawY();
+
                                     refreshButtonStartX =
                                             view.getX();
+
+                                    refreshButtonStartY =
+                                            view.getY();
 
                                     refreshButtonDragging =
                                             false;
@@ -439,11 +478,23 @@ public final class MainActivity
                                             .cancel();
 
 
+                                    if (
+                                            view.getParent() !=
+                                                    null
+                                    ) {
+
+                                        view.getParent()
+                                                .requestDisallowInterceptTouchEvent(
+                                                        true
+                                                );
+                                    }
+
+
                                     return true;
 
 
                                 /* =====================
-                                   MOVE BUTTON
+                                   MOVE
                                 ====================== */
 
                                 case MotionEvent.ACTION_MOVE:
@@ -453,17 +504,32 @@ public final class MainActivity
                                                     -
                                             refreshTouchDownRawX;
 
+                                    float deltaY =
+                                            event.getRawY()
+                                                    -
+                                            refreshTouchDownRawY;
+
 
                                     if (
-                                            !refreshButtonDragging &&
-                                            Math.abs(
-                                                    deltaX
-                                            ) >
-                                            refreshTouchSlop
+                                            !refreshButtonDragging
                                     ) {
 
-                                        refreshButtonDragging =
-                                                true;
+                                        float distance =
+                                                (float)
+                                                        Math.hypot(
+                                                                deltaX,
+                                                                deltaY
+                                                        );
+
+
+                                        if (
+                                                distance >
+                                                        refreshTouchSlop
+                                        ) {
+
+                                            refreshButtonDragging =
+                                                    true;
+                                        }
                                     }
 
 
@@ -474,7 +540,11 @@ public final class MainActivity
                                         moveRefreshButton(
                                                 refreshButtonStartX
                                                         +
-                                                deltaX
+                                                deltaX,
+
+                                                refreshButtonStartY
+                                                        +
+                                                deltaY
                                         );
                                     }
 
@@ -483,7 +553,7 @@ public final class MainActivity
 
 
                                 /* =====================
-                                   RELEASE
+                                   TOUCH RELEASE
                                 ====================== */
 
                                 case MotionEvent.ACTION_UP:
@@ -492,7 +562,9 @@ public final class MainActivity
                                             refreshButtonDragging
                                     ) {
 
-                                        snapRefreshButtonToNearestEdge();
+                                        clampRefreshButtonInsideSafeArea();
+
+                                        saveFloatingRefreshButtonPosition();
 
                                     } else {
 
@@ -504,11 +576,23 @@ public final class MainActivity
                                             false;
 
 
+                                    if (
+                                            view.getParent() !=
+                                                    null
+                                    ) {
+
+                                        view.getParent()
+                                                .requestDisallowInterceptTouchEvent(
+                                                        false
+                                                );
+                                    }
+
+
                                     return true;
 
 
                                 /* =====================
-                                   CANCEL
+                                   TOUCH CANCEL
                                 ====================== */
 
                                 case MotionEvent.ACTION_CANCEL:
@@ -517,12 +601,26 @@ public final class MainActivity
                                             refreshButtonDragging
                                     ) {
 
-                                        snapRefreshButtonToNearestEdge();
+                                        clampRefreshButtonInsideSafeArea();
+
+                                        saveFloatingRefreshButtonPosition();
                                     }
 
 
                                     refreshButtonDragging =
                                             false;
+
+
+                                    if (
+                                            view.getParent() !=
+                                                    null
+                                    ) {
+
+                                        view.getParent()
+                                                .requestDisallowInterceptTouchEvent(
+                                                        false
+                                                );
+                                    }
 
 
                                     return true;
@@ -537,7 +635,7 @@ public final class MainActivity
 
 
         /* =============================================
-           RESTORE SAVED SIDE
+           RESTORE LAST POSITION
         ============================================== */
 
         floatingRefreshButton.post(
@@ -547,7 +645,7 @@ public final class MainActivity
 
 
     /* =====================================================
-       MANUAL PAGE REFRESH
+       REFRESH CURRENT PAGE
     ===================================================== */
 
     private void refreshCurrentPage() {
@@ -569,6 +667,7 @@ public final class MainActivity
                     .animate()
                     .cancel();
 
+
             floatingRefreshButton
                     .animate()
                     .rotationBy(
@@ -588,12 +687,18 @@ public final class MainActivity
     /* =====================================================
        MOVE FLOATING REFRESH BUTTON
 
-       Only horizontal movement is allowed.
-       Vertical position remains fixed.
+       Supports full 2D movement.
+
+       X:
+           left ↔ right
+
+       Y:
+           top ↕ bottom
     ===================================================== */
 
     private void moveRefreshButton(
-            float requestedX
+            float requestedX,
+            float requestedY
     ) {
 
         if (
@@ -612,14 +717,25 @@ public final class MainActivity
         float maxX =
                 getRefreshButtonMaxX();
 
+        float minY =
+                getRefreshButtonMinY();
+
+        float maxY =
+                getRefreshButtonMaxY();
+
 
         float safeX =
-                Math.max(
+                clamp(
+                        requestedX,
                         minX,
-                        Math.min(
-                                requestedX,
-                                maxX
-                        )
+                        maxX
+                );
+
+        float safeY =
+                clamp(
+                        requestedY,
+                        minY,
+                        maxY
                 );
 
 
@@ -627,14 +743,19 @@ public final class MainActivity
                 .setX(
                         safeX
                 );
+
+        floatingRefreshButton
+                .setY(
+                        safeY
+                );
     }
 
 
     /* =====================================================
-       SNAP TO NEAREST EDGE
+       FORCE BUTTON INSIDE SAFE AREA
     ===================================================== */
 
-    private void snapRefreshButtonToNearestEdge() {
+    private void clampRefreshButtonInsideSafeArea() {
 
         if (
                 floatingRefreshButton ==
@@ -646,64 +767,36 @@ public final class MainActivity
         }
 
 
-        float minX =
-                getRefreshButtonMinX();
-
-        float maxX =
-                getRefreshButtonMaxX();
-
-
-        float buttonCenterX =
-                floatingRefreshButton.getX()
-                        +
-                (
-                        floatingRefreshButton.getWidth()
-                                /
-                        2f
-                );
-
-
-        float parentCenterX =
+        if (
                 rootContainer.getWidth()
-                        /
-                2f;
+                        <= 0 ||
+                rootContainer.getHeight()
+                        <= 0 ||
+                floatingRefreshButton.getWidth()
+                        <= 0 ||
+                floatingRefreshButton.getHeight()
+                        <= 0
+        ) {
+            return;
+        }
 
 
-        boolean placeOnRight =
-                buttonCenterX >=
-                        parentCenterX;
-
-
-        float targetX =
-                placeOnRight
-                        ? maxX
-                        : minX;
-
-
-        floatingRefreshButton
-                .animate()
-                .cancel();
-
-
-        floatingRefreshButton
-                .animate()
-                .x(
-                        targetX
-                )
-                .setDuration(
-                        REFRESH_SNAP_DURATION_MS
-                )
-                .start();
-
-
-        saveFloatingRefreshButtonSide(
-                placeOnRight
+        moveRefreshButton(
+                floatingRefreshButton.getX(),
+                floatingRefreshButton.getY()
         );
     }
 
 
     /* =====================================================
-       RESTORE SAVED BUTTON POSITION
+       RESTORE SAVED POSITION
+
+       Position is stored as ratio rather than raw pixels.
+
+       Benefit:
+       - Works better after rotation
+       - Works on different screen sizes
+       - Stays inside available safe area
     ===================================================== */
 
     private void restoreFloatingRefreshButtonPosition() {
@@ -721,7 +814,11 @@ public final class MainActivity
         if (
                 rootContainer.getWidth()
                         <= 0 ||
+                rootContainer.getHeight()
+                        <= 0 ||
                 floatingRefreshButton.getWidth()
+                        <= 0 ||
+                floatingRefreshButton.getHeight()
                         <= 0
         ) {
 
@@ -740,33 +837,235 @@ public final class MainActivity
                 );
 
 
-        boolean placeOnRight =
-                preferences.getBoolean(
-                        PREF_REFRESH_BUTTON_RIGHT,
-                        true
+        float minX =
+                getRefreshButtonMinX();
+
+        float maxX =
+                getRefreshButtonMaxX();
+
+        float minY =
+                getRefreshButtonMinY();
+
+        float maxY =
+                getRefreshButtonMaxY();
+
+
+        boolean hasSavedX =
+                preferences.contains(
+                        PREF_REFRESH_X_RATIO
                 );
+
+        boolean hasSavedY =
+                preferences.contains(
+                        PREF_REFRESH_Y_RATIO
+                );
+
+
+        /* =============================================
+           FIRST RUN DEFAULT
+
+           Right side + vertical center.
+        ============================================== */
+
+        if (
+                !hasSavedX ||
+                !hasSavedY
+        ) {
+
+            float defaultX =
+                    maxX;
+
+            float defaultY =
+                    minY
+                            +
+                    (
+                            (
+                                    maxY
+                                            -
+                                    minY
+                            )
+                                    /
+                            2f
+                    );
+
+
+            moveRefreshButton(
+                    defaultX,
+                    defaultY
+            );
+
+
+            return;
+        }
+
+
+        float savedXRatio =
+                preferences.getFloat(
+                        PREF_REFRESH_X_RATIO,
+                        1f
+                );
+
+        float savedYRatio =
+                preferences.getFloat(
+                        PREF_REFRESH_Y_RATIO,
+                        0.5f
+                );
+
+
+        savedXRatio =
+                clamp(
+                        savedXRatio,
+                        0f,
+                        1f
+                );
+
+        savedYRatio =
+                clamp(
+                        savedYRatio,
+                        0f,
+                        1f
+                );
+
+
+        float availableWidth =
+                maxX
+                        -
+                minX;
+
+        float availableHeight =
+                maxY
+                        -
+                minY;
 
 
         float targetX =
-                placeOnRight
-                        ? getRefreshButtonMaxX()
-                        : getRefreshButtonMinX();
-
-
-        floatingRefreshButton
-                .setX(
-                        targetX
+                minX
+                        +
+                (
+                        availableWidth
+                                *
+                        savedXRatio
                 );
+
+        float targetY =
+                minY
+                        +
+                (
+                        availableHeight
+                                *
+                        savedYRatio
+                );
+
+
+        moveRefreshButton(
+                targetX,
+                targetY
+        );
     }
 
 
     /* =====================================================
-       SAVE BUTTON SIDE
+       SAVE FLOATING BUTTON POSITION
     ===================================================== */
 
-    private void saveFloatingRefreshButtonSide(
-            boolean placeOnRight
-    ) {
+    private void saveFloatingRefreshButtonPosition() {
+
+        if (
+                floatingRefreshButton ==
+                        null ||
+                rootContainer ==
+                        null
+        ) {
+            return;
+        }
+
+
+        float minX =
+                getRefreshButtonMinX();
+
+        float maxX =
+                getRefreshButtonMaxX();
+
+        float minY =
+                getRefreshButtonMinY();
+
+        float maxY =
+                getRefreshButtonMaxY();
+
+
+        float availableWidth =
+                maxX
+                        -
+                minX;
+
+        float availableHeight =
+                maxY
+                        -
+                minY;
+
+
+        float xRatio;
+
+
+        if (
+                availableWidth >
+                        0f
+        ) {
+
+            xRatio =
+                    (
+                            floatingRefreshButton.getX()
+                                    -
+                            minX
+                    )
+                            /
+                    availableWidth;
+
+        } else {
+
+            xRatio =
+                    0f;
+        }
+
+
+        float yRatio;
+
+
+        if (
+                availableHeight >
+                        0f
+        ) {
+
+            yRatio =
+                    (
+                            floatingRefreshButton.getY()
+                                    -
+                            minY
+                    )
+                            /
+                    availableHeight;
+
+        } else {
+
+            yRatio =
+                    0f;
+        }
+
+
+        xRatio =
+                clamp(
+                        xRatio,
+                        0f,
+                        1f
+                );
+
+        yRatio =
+                clamp(
+                        yRatio,
+                        0f,
+                        1f
+                );
+
 
         try {
 
@@ -775,22 +1074,26 @@ public final class MainActivity
                     MODE_PRIVATE
             )
                     .edit()
-                    .putBoolean(
-                            PREF_REFRESH_BUTTON_RIGHT,
-                            placeOnRight
+                    .putFloat(
+                            PREF_REFRESH_X_RATIO,
+                            xRatio
+                    )
+                    .putFloat(
+                            PREF_REFRESH_Y_RATIO,
+                            yRatio
                     )
                     .apply();
 
         } catch (
                 Exception ignored
         ) {
-            // Non-critical UI preference.
+            // Position preference is non-critical.
         }
     }
 
 
     /* =====================================================
-       REFRESH BUTTON LEFT BOUNDARY
+       SAFE LEFT BOUNDARY
     ===================================================== */
 
     private float getRefreshButtonMinX() {
@@ -817,9 +1120,7 @@ public final class MainActivity
         ) {
 
             FrameLayout.LayoutParams params =
-                    (
-                            FrameLayout.LayoutParams
-                    )
+                    (FrameLayout.LayoutParams)
                             floatingRefreshButton
                                     .getLayoutParams();
 
@@ -836,7 +1137,7 @@ public final class MainActivity
 
 
     /* =====================================================
-       REFRESH BUTTON RIGHT BOUNDARY
+       SAFE RIGHT BOUNDARY
     ===================================================== */
 
     private float getRefreshButtonMaxX() {
@@ -863,9 +1164,7 @@ public final class MainActivity
         ) {
 
             FrameLayout.LayoutParams params =
-                    (
-                            FrameLayout.LayoutParams
-                    )
+                    (FrameLayout.LayoutParams)
                             floatingRefreshButton
                                     .getLayoutParams();
 
@@ -874,7 +1173,7 @@ public final class MainActivity
         }
 
 
-        float maxX =
+        float maximumX =
                 rootContainer.getWidth()
                         -
                 rootContainer.getPaddingRight()
@@ -886,23 +1185,132 @@ public final class MainActivity
 
         return Math.max(
                 getRefreshButtonMinX(),
-                maxX
+                maximumX
         );
     }
 
 
     /* =====================================================
-       LEGACY SWIPE REFRESH COMPATIBILITY
+       SAFE TOP BOUNDARY
 
-       Kept temporarily so the existing
-       ElevenPlayWebChromeClient can continue compiling
-       until that file is replaced.
-
-       Pull-to-refresh itself is NOT active.
+       Keeps button below:
+       - Status bar
+       - Display cutout
     ===================================================== */
 
-    public void stopSwipeRefresh() {
-        // Intentionally empty.
+    private float getRefreshButtonMinY() {
+
+        if (
+                floatingRefreshButton ==
+                        null ||
+                rootContainer ==
+                        null
+        ) {
+            return 0f;
+        }
+
+
+        int topMargin =
+                0;
+
+
+        if (
+                floatingRefreshButton
+                        .getLayoutParams()
+                        instanceof
+                        FrameLayout.LayoutParams
+        ) {
+
+            FrameLayout.LayoutParams params =
+                    (FrameLayout.LayoutParams)
+                            floatingRefreshButton
+                                    .getLayoutParams();
+
+            topMargin =
+                    params.topMargin;
+        }
+
+
+        return rootContainer
+                .getPaddingTop()
+                +
+                topMargin;
+    }
+
+
+    /* =====================================================
+       SAFE BOTTOM BOUNDARY
+
+       Keeps button above Android navigation bar.
+    ===================================================== */
+
+    private float getRefreshButtonMaxY() {
+
+        if (
+                floatingRefreshButton ==
+                        null ||
+                rootContainer ==
+                        null
+        ) {
+            return 0f;
+        }
+
+
+        int bottomMargin =
+                0;
+
+
+        if (
+                floatingRefreshButton
+                        .getLayoutParams()
+                        instanceof
+                        FrameLayout.LayoutParams
+        ) {
+
+            FrameLayout.LayoutParams params =
+                    (FrameLayout.LayoutParams)
+                            floatingRefreshButton
+                                    .getLayoutParams();
+
+            bottomMargin =
+                    params.bottomMargin;
+        }
+
+
+        float maximumY =
+                rootContainer.getHeight()
+                        -
+                rootContainer.getPaddingBottom()
+                        -
+                bottomMargin
+                        -
+                floatingRefreshButton.getHeight();
+
+
+        return Math.max(
+                getRefreshButtonMinY(),
+                maximumY
+        );
+    }
+
+
+    /* =====================================================
+       FLOAT CLAMP HELPER
+    ===================================================== */
+
+    private float clamp(
+            float value,
+            float minimum,
+            float maximum
+    ) {
+
+        return Math.max(
+                minimum,
+                Math.min(
+                        value,
+                        maximum
+                )
+        );
     }
 
 
