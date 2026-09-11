@@ -7,10 +7,6 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.widget.ProgressBar;
 
-import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
-
-import com.elevenplay.app.R;
-
 /* =========================================================
    11PLAY — WEB CHROME CLIENT
 
@@ -18,10 +14,10 @@ import com.elevenplay.app.R;
    - Handle WebView file chooser requests
    - Support Live Chat file/image/video attachments
    - Update page loading progress
-   - Stop pull-to-refresh indicator after page load
    - Keep file selection delegated to MainActivity
 
    Important:
+   - Pull-to-refresh has been completely removed.
    - MainActivity owns the Android Activity Result launcher.
    - This class does not request broad storage permission.
    - File access is performed through Android's system picker.
@@ -55,7 +51,8 @@ public final class ElevenPlayWebChromeClient
        DEPENDENCIES
     ===================================================== */
 
-    private final ProgressBar progressBar;
+    private final ProgressBar
+            progressBar;
 
     private final FileChooserDelegate
             fileChooserDelegate;
@@ -69,6 +66,7 @@ public final class ElevenPlayWebChromeClient
             ProgressBar progressBar,
             FileChooserDelegate fileChooserDelegate
     ) {
+
         this.progressBar =
                 progressBar;
 
@@ -86,10 +84,12 @@ public final class ElevenPlayWebChromeClient
             WebView view,
             int newProgress
     ) {
+
         super.onProgressChanged(
                 view,
                 newProgress
         );
+
 
         int safeProgress =
                 Math.max(
@@ -106,113 +106,38 @@ public final class ElevenPlayWebChromeClient
         ============================================== */
 
         if (
-                progressBar !=
-                        null
-        ) {
-
-            progressBar.setProgress(
-                    safeProgress
-            );
-
-            if (
-                    safeProgress >=
-                            100
-            ) {
-
-                progressBar.setVisibility(
-                        View.GONE
-                );
-
-            } else {
-
-                if (
-                        progressBar.getVisibility() !=
-                                View.VISIBLE
-                ) {
-
-                    progressBar.setVisibility(
-                            View.VISIBLE
-                    );
-                }
-            }
-        }
-
-
-        /* =============================================
-           PULL-TO-REFRESH COMPLETE
-
-           When the WebView finishes loading, stop the
-           SwipeRefreshLayout spinner.
-
-           This also works for normal page loads and does
-           nothing if SwipeRefreshLayout is not refreshing.
-        ============================================== */
-
-        if (
-                safeProgress >=
-                        100
-        ) {
-
-            stopSwipeRefresh(
-                    view
-            );
-        }
-    }
-
-
-    /* =====================================================
-       STOP SWIPE REFRESH
-    ===================================================== */
-
-    private void stopSwipeRefresh(
-            WebView webView
-    ) {
-
-        if (
-                webView ==
+                progressBar ==
                         null
         ) {
             return;
         }
 
 
-        try {
-
-            View rootView =
-                    webView.getRootView();
-
-            if (
-                    rootView ==
-                            null
-            ) {
-                return;
-            }
+        progressBar.setProgress(
+                safeProgress
+        );
 
 
-            SwipeRefreshLayout
-                    swipeRefreshLayout =
-                    rootView.findViewById(
-                            R.id.swipeRefreshLayout
-                    );
-
-
-            if (
-                    swipeRefreshLayout !=
-                            null &&
-                    swipeRefreshLayout
-                            .isRefreshing()
-            ) {
-
-                swipeRefreshLayout
-                        .setRefreshing(
-                                false
-                        );
-            }
-
-        } catch (
-                Exception ignored
+        if (
+                safeProgress >=
+                        100
         ) {
-            // Refresh UI failure must never break WebView.
+
+            progressBar.setVisibility(
+                    View.GONE
+            );
+
+        } else {
+
+            if (
+                    progressBar.getVisibility() !=
+                            View.VISIBLE
+            ) {
+
+                progressBar.setVisibility(
+                        View.VISIBLE
+                );
+            }
         }
     }
 
@@ -284,13 +209,22 @@ public final class ElevenPlayWebChromeClient
             return true;
 
         } catch (
-                Exception error
+                Exception ignored
         ) {
 
-            filePathCallback
-                    .onReceiveValue(
-                            null
-                    );
+            try {
+
+                filePathCallback
+                        .onReceiveValue(
+                                null
+                        );
+
+            } catch (
+                    Exception ignoredAgain
+            ) {
+                // Web page may already have navigated away.
+            }
+
 
             return true;
         }
